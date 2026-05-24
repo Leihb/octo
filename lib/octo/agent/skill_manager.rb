@@ -31,7 +31,7 @@ module Octo
       # @param input [String] Raw user input
       # @return [Hash]
       def parse_skill_command(input)
-        return { matched: false } unless input.start_with?("/")
+        return { matched: false } unless input.is_a?(String) && input.start_with?("/")
 
         # Split off the first whitespace-delimited token after the leading "/".
         # Shape of a slash command:

@@ -63,7 +63,7 @@ RSpec.describe Octo::Tools::Terminal do
     t = Octo::Tools::Terminal.new
     begin
       Octo::Tools::Terminal::SessionManager.list.each do |s|
-        t.execute(session_id: s.id, kill: true)
+        t.execute(handle_id: s.id, kill: true)
       end
     rescue StandardError
     end
@@ -78,20 +78,14 @@ RSpec.describe Octo::Tools::Terminal do
       expect(result).to include(:error)
     end
 
-    it "requires input when session_id is given" do
-      result = tool.execute(session_id: 1)
-      expect(result).to include(:error)
-      expect(result[:error]).to match(/input/i)
-    end
-
-    it "requires session_id when kill: true" do
+    it "requires handle_id when kill: true" do
       result = tool.execute(kill: true)
       expect(result).to include(:error)
-      expect(result[:error]).to match(/session_id/i)
+      expect(result[:error]).to match(/handle_id|command/i)
     end
 
-    it "rejects unknown session_id on continue" do
-      result = tool.execute(session_id: 99_999, input: "hi\n")
+    it "rejects unknown handle_id on continue" do
+      result = tool.execute(handle_id: "nonexistent-uuid", input: "hi\n")
       expect(result).to include(:error)
       expect(result[:error]).to match(/not found/i)
     end
@@ -109,14 +103,14 @@ RSpec.describe Octo::Tools::Terminal do
   describe "one-shot commands (shell mode)" do
     it "runs a simple command and returns exit_code without session_id" do
       result = tool.execute(command: "echo hello")
-      expect(result).not_to have_key(:session_id)
+      expect(result).not_to have_key(:handle_id)
       expect(result[:exit_code]).to eq(0)
       expect(result[:output]).to include("hello")
     end
 
     it "captures non-zero exit codes" do
       result = tool.execute(command: "bash -c 'exit 42'")
-      expect(result).not_to have_key(:session_id)
+      expect(result).not_to have_key(:handle_id)
       expect(result[:exit_code]).to eq(42)
     end
 
@@ -141,7 +135,7 @@ RSpec.describe Octo::Tools::Terminal do
       # Completed commands should NOT leak a session_id; a persistent
       # shell may still be registered internally for reuse, but the
       # caller's response is final.
-      expect(result).not_to include(:session_id)
+      expect(result).not_to include(:handle_id)
       expect(result[:exit_code]).to eq(0)
     end
 
@@ -158,7 +152,7 @@ RSpec.describe Octo::Tools::Terminal do
     it "runs a python one-liner and returns exit_code on EOF" do
       result = tool.execute(command: "python3 -c 'print(\"raw-ok\")'")
       expect(result[:output]).to include("raw-ok")
-      expect(result).not_to have_key(:session_id)   # EOF auto-closed
+      expect(result).not_to have_key(:handle_id)   # EOF auto-closed
     end
   end
 
@@ -166,38 +160,39 @@ RSpec.describe Octo::Tools::Terminal do
   # Interactive handshake (command blocks on prompt → continue with input)
   # ---------------------------------------------------------------------------
   describe "interactive prompt handshake" do
-    it "returns session_id when the command blocks on stdin" do
+    it "returns handle_id when the command blocks on stdin" do
       result = tool.execute(
         command: %q{bash -c 'read -p "Name: " name && echo "hi $name"'},
         timeout: 3
       )
-      # Prompt appeared but command hasn't finished → we get a session_id back.
-      expect(result[:session_id]).to be_a(Integer)
+      # Prompt appeared but command hasn't finished → we get a handle_id back.
+      expect(result[:handle_id]).to match(/\A[a-z0-9]{9}\z/)
+      expect(result[:state]).to eq("waiting")
       expect(result[:output]).to include("Name:")
       expect(result).not_to have_key(:exit_code)
     end
 
-    it "resumes a waiting session via session_id+input" do
+    it "resumes a waiting handle via handle_id+input" do
       first = tool.execute(
         command: %q{bash -c 'read -p "Name: " name && echo "hi $name"'},
         timeout: 3
       )
-      sid = first[:session_id]
-      expect(sid).to be_a(Integer)
+      hid = first[:handle_id]
+      expect(hid).to match(/\A[a-z0-9]{9}\z/)
 
-      second = tool.execute(session_id: sid, input: "Alice\n", timeout: 5)
+      second = tool.execute(handle_id: hid, input: "Alice\n", timeout: 5)
       expect(second[:output]).to include("hi Alice")
-      expect(second).not_to have_key(:session_id)    # command finished
+      expect(second).not_to have_key(:handle_id)    # command finished
       expect(second[:exit_code]).to eq(0)
     end
 
     it "does not treat command output containing a bogus marker as completion" do
       # Output literal looks like a marker but uses a different token.
       result = tool.execute(
-        command: %q{echo "__OCTO_DONE_fakeToken_0__"}
+        command: %q{echo "__CLACKY_DONE_fakeToken_0__"}
       )
       expect(result[:exit_code]).to eq(0)
-      expect(result[:output]).to include("__OCTO_DONE_fakeToken_0__")
+      expect(result[:output]).to include("__CLACKY_DONE_fakeToken_0__")
     end
 
     it "returns early (well before timeout) when output goes idle at a prompt" do
@@ -212,7 +207,7 @@ RSpec.describe Octo::Tools::Terminal do
       )
       elapsed = Time.now - t0
 
-      expect(result[:session_id]).to be_a(Integer)
+      expect(result[:handle_id]).to match(/\A[a-z0-9]{9}\z/)
       expect(result[:output]).to include("Name:")
       expect(elapsed).to be < 3.0   # well under the 10s timeout
     end
@@ -222,25 +217,25 @@ RSpec.describe Octo::Tools::Terminal do
   # Kill
   # ---------------------------------------------------------------------------
   describe "kill" do
-    it "kills a waiting session and forgets it" do
+    it "kills a waiting handle and forgets it" do
       first = tool.execute(
         command: %q{bash -c 'read -p "go? " x'},
         timeout: 2
       )
-      sid = first[:session_id]
-      expect(sid).to be_a(Integer)
+      hid = first[:handle_id]
+      expect(hid).to match(/\A[a-z0-9]{9}\z/)
 
-      killed = tool.execute(session_id: sid, kill: true)
+      killed = tool.execute(handle_id: hid, kill: true)
       expect(killed[:killed]).to eq(true)
-      expect(killed[:session_id]).to eq(sid)
+      expect(killed[:handle_id]).to eq(hid)
 
       # Subsequent continue is rejected.
-      followup = tool.execute(session_id: sid, input: "hi\n")
+      followup = tool.execute(handle_id: hid, input: "hi\n")
       expect(followup).to include(:error)
     end
 
-    it "errors when killing an unknown session" do
-      result = tool.execute(session_id: 99_999, kill: true)
+    it "errors when killing an unknown handle" do
+      result = tool.execute(handle_id: "nonexistent-uuid", kill: true)
       expect(result).to include(:error)
     end
   end
@@ -249,14 +244,14 @@ RSpec.describe Octo::Tools::Terminal do
   # Multiple concurrent sessions
   # ---------------------------------------------------------------------------
   describe "concurrent sessions" do
-    it "allows multiple interactive sessions at once, tracked by distinct ids" do
+    it "allows multiple interactive sessions at once, tracked by distinct handles" do
       a = tool.execute(command: %q{bash -c 'read -p "A? " x && echo A=$x'}, timeout: 3)
       b = tool.execute(command: %q{bash -c 'read -p "B? " y && echo B=$y'}, timeout: 3)
 
-      expect(a[:session_id]).not_to eq(b[:session_id])
+      expect(a[:handle_id]).not_to eq(b[:handle_id])
 
-      ra = tool.execute(session_id: a[:session_id], input: "one\n", timeout: 5)
-      rb = tool.execute(session_id: b[:session_id], input: "two\n", timeout: 5)
+      ra = tool.execute(handle_id: a[:handle_id], input: "one\n", timeout: 5)
+      rb = tool.execute(handle_id: b[:handle_id], input: "two\n", timeout: 5)
 
       expect(ra[:output]).to include("A=one")
       expect(rb[:output]).to include("B=two")
@@ -266,16 +261,15 @@ RSpec.describe Octo::Tools::Terminal do
   end
 
   # ---------------------------------------------------------------------------
-  # Timeout / still-running case
+  # Async / handle-return case
   # ---------------------------------------------------------------------------
   describe "long-running commands" do
-    it "returns a session_id when a command runs past the timeout" do
-      result = tool.execute(command: "sleep 5", timeout: 1)
-      # Didn't finish in time, so we hand control back to the AI.
-      expect(result[:session_id]).to be_a(Integer)
+    it "returns a handle_id for async commands" do
+      result = tool.execute(command: "sleep 5", async: true)
+      expect(result[:handle_id]).to match(/\A[a-z0-9]{9}\z/)
       expect(result).not_to have_key(:exit_code)
       # Clean up.
-      tool.execute(session_id: result[:session_id], kill: true)
+      tool.execute(handle_id: result[:handle_id], kill: true)
     end
   end
 
@@ -287,7 +281,7 @@ RSpec.describe Octo::Tools::Terminal do
       result = tool.execute(command: "sudo ls /")
       expect(result[:security_blocked]).to eq(true)
       expect(result[:error]).to match(/\[Security\]/)
-      expect(result).not_to have_key(:session_id)
+      expect(result).not_to have_key(:handle_id)
     end
 
     it "moves rm'd files into the project trash via the safe-rm shell function" do
@@ -362,10 +356,10 @@ RSpec.describe Octo::Tools::Terminal do
       # Start a session that reads a line from stdin.
       out = tool.execute(command: %(ruby -e 'puts STDIN.gets'), timeout: 1)
       # Either we got a session back (blocked on gets), or it finished too fast; handle both.
-      if out[:session_id]
-        sid = out[:session_id]
+      if out[:handle_id]
+        sid = out[:handle_id]
         # `rm -rf /` as *input* is just text sent to a running program — must not be blocked.
-        reply = tool.execute(session_id: sid, input: "rm -rf /\n")
+        reply = tool.execute(handle_id: sid, input: "rm -rf /\n")
         expect(reply).not_to include(:security_blocked)
       else
         # In the unlikely event the child finished before we could catch it, just pass.
@@ -375,50 +369,55 @@ RSpec.describe Octo::Tools::Terminal do
   end
 
   # ---------------------------------------------------------------------------
-  # Background mode
+  # Async mode — handle-based, replaces the old "background mode" section.
   # ---------------------------------------------------------------------------
-  describe "background mode" do
-    it "returns a session_id with state=background for a long-running process" do
-      result = tool.execute(command: "sleep 5", background: true)
-      expect(result[:session_id]).to be_a(Integer)
-      expect(result[:state]).to eq("background")
+  describe "async mode" do
+    before { Octo::BackgroundTaskRegistry.reset! }
+    after  { Octo::BackgroundTaskRegistry.reset! }
+
+    it "returns a handle (UUID) with state=running for a long-running process" do
+      result = tool.execute(command: "sleep 5", async: true)
+      expect(result[:accepted]).to   eq(true)
+      expect(result[:handle_id]).to  be_a(String)
+      expect(result[:state]).to      eq("running")
+      expect(result[:output_file]).to be_a(String)
       expect(result).not_to have_key(:exit_code)
-      tool.execute(session_id: result[:session_id], kill: true)
+      tool.execute(handle_id: result[:handle_id], kill: true)
     end
 
     it "captures startup output within the collection window" do
       script = %(ruby -e 'puts "booted"; STDOUT.flush; sleep 5')
-      result = tool.execute(command: script, background: true)
-      expect(result[:session_id]).to be_a(Integer)
-      expect(result[:output].to_s).to include("booted")
-      tool.execute(session_id: result[:session_id], kill: true)
+      result = tool.execute(command: script, async: true)
+      expect(result[:handle_id]).to be_a(String)
+      expect(result[:startup_output].to_s).to include("booted")
+      tool.execute(handle_id: result[:handle_id], kill: true)
     end
 
-    it "returns exit_code (not session_id) when the process crashes during the collection window" do
-      result = tool.execute(command: "false", background: true)
+    it "returns exit_code (not handle_id) when the process crashes during the collection window" do
+      result = tool.execute(command: "false", async: true)
       expect(result[:exit_code]).to eq(1)
-      expect(result).not_to have_key(:session_id)
+      expect(result).not_to have_key(:handle_id)
     end
 
-    it "supports polling a background session with empty input" do
+    it "supports sending input + polling via the handle" do
       # Must still be alive after the 2s background collection window.
       script = %q{ruby -e 'STDOUT.sync=true; 10.times { |i| puts "tick #{i}"; sleep 0.4 }'}
-      started = tool.execute(command: script, background: true)
-      expect(started[:session_id]).to be_a(Integer)
-      sid = started[:session_id]
+      started = tool.execute(command: script, async: true)
+      expect(started[:handle_id]).to be_a(String)
+      handle = started[:handle_id]
 
       # Poll after giving it a moment to produce more output.
       sleep 0.5
-      polled = tool.execute(session_id: sid, input: "")
-      # Either the process is still alive (session_id again) or it just exited (exit_code).
-      if polled[:session_id]
+      polled = tool.execute(handle_id: handle, input: "")
+      # Either still alive (handle_id again) or just exited (exit_code).
+      if polled[:handle_id]
         expect(polled[:output]).to be_a(String)
       else
         expect(polled[:exit_code]).to eq(0)
       end
 
       # Clean up if still alive.
-      tool.execute(session_id: sid, kill: true) if polled[:session_id]
+      tool.execute(handle_id: handle, kill: true) if polled[:handle_id]
     end
   end
 
@@ -458,25 +457,22 @@ RSpec.describe Octo::Tools::Terminal do
       expect(r2[:output]).to include("[unset]")
     end
 
-    it "background commands do NOT poison the persistent shell" do
-      bg = tool.execute(command: "sleep 30", background: true)
-      expect(bg[:session_id]).to be_a(Integer)
+    it "async commands do NOT poison the persistent shell" do
+      bg = tool.execute(command: "sleep 30", async: true)
+      expect(bg[:handle_id]).to be_a(String)
 
       fg = tool.execute(command: "echo alive")
       expect(fg[:exit_code]).to eq(0)
       expect(fg[:output]).to include("alive")
 
-      tool.execute(session_id: bg[:session_id], kill: true)
+      tool.execute(handle_id: bg[:handle_id], kill: true)
     end
 
     it "recovers on the next call after a session blocks mid-command" do
-      # Short timeout forces the command to be handed back as a session_id,
-      # which "donates" the persistent slot to the caller.
-      stuck = tool.execute(command: "sleep 5", timeout: 1)
-      expect(stuck[:session_id]).to be_a(Integer)
-      # state will be "waiting" (idle with no output) or "timeout" — either
-      # way, the persistent slot must be released back to the pool.
-      expect(%w[waiting timeout]).to include(stuck[:state])
+      # Async command returns a handle, which "donates" the persistent slot.
+      stuck = tool.execute(command: "sleep 5", async: true)
+      expect(stuck[:handle_id]).to match(/\A[a-z0-9]{9}\z/)
+      expect(stuck[:state]).to eq("running")
 
       # Next foreground call must succeed (a fresh persistent shell is
       # spawned to replace the donated one).
@@ -484,7 +480,7 @@ RSpec.describe Octo::Tools::Terminal do
       expect(ok[:exit_code]).to eq(0)
       expect(ok[:output]).to include("recovered")
 
-      tool.execute(session_id: stuck[:session_id], kill: true)
+      tool.execute(handle_id: stuck[:handle_id], kill: true)
     end
   end
 
@@ -496,21 +492,25 @@ RSpec.describe Octo::Tools::Terminal do
       expect(tool.format_call(command: "ls -la")).to eq("terminal(ls -la)")
     end
 
-    it "formats a background invocation" do
-      expect(tool.format_call(command: "rails s", background: true)).to eq("terminal(rails s, background)")
+    it "formats an async invocation" do
+      expect(tool.format_call(command: "rails s", async: true)).to eq("terminal(rails s, async)")
     end
 
     it "formats a continue invocation (input send)" do
-      s = tool.format_call(session_id: 3, input: "mypass\n")
+      s = tool.format_call(handle_id: "abc12345", input: "mypass\n")
       expect(s).to eq("terminal(send \"mypass\")")
     end
 
     it "formats a check-output (empty input poll) invocation" do
-      expect(tool.format_call(session_id: 3, input: "")).to eq("terminal(check output)")
+      expect(tool.format_call(handle_id: "abc12345", input: "")).to eq("terminal(check handle)")
+    end
+
+    it "formats a query (no input) invocation" do
+      expect(tool.format_call(handle_id: "abc12345")).to eq("terminal(query handle)")
     end
 
     it "formats a kill invocation" do
-      expect(tool.format_call(session_id: 3, kill: true)).to eq("terminal(stop)")
+      expect(tool.format_call(handle_id: "abc12345", kill: true)).to eq("terminal(cancel handle)")
     end
 
     it "collapses multi-line commands into a single line" do
@@ -540,12 +540,12 @@ RSpec.describe Octo::Tools::Terminal do
       expect(tool.format_result(exit_code: 1, bytes_read: 12)).to eq("✗ exit=1")
     end
 
-    it "renders a waiting session" do
-      expect(tool.format_result(session_id: 3, bytes_read: 5)).to eq("… waiting")
+    it "renders a waiting handle" do
+      expect(tool.format_result(handle_id: "abc", bytes_read: 5)).to eq("… waiting")
     end
 
     it "renders a kill result" do
-      expect(tool.format_result(killed: true, session_id: 3)).to eq("stopped")
+      expect(tool.format_result(killed: true, handle_id: "abc")).to eq("stopped")
     end
 
     it "renders an error" do
@@ -554,7 +554,7 @@ RSpec.describe Octo::Tools::Terminal do
 
     it "puts output lines first and the status as a trailing footer" do
       formatted = tool.format_result(
-        session_id: 7, bytes_read: 30,
+        handle_id: "abc", bytes_read: 30,
         output: "line1\nline2\nline3"
       )
       expect(formatted).to eq("line1\nline2\nline3\n… waiting")
@@ -562,7 +562,7 @@ RSpec.describe Octo::Tools::Terminal do
 
     it "keeps only the last DISPLAY_TAIL_LINES lines and drops blanks, then status" do
       output = ((1..20).map { |i| "row#{i}" }).join("\n")
-      formatted = tool.format_result(session_id: 1, bytes_read: 100, output: output)
+      formatted = tool.format_result(handle_id: "abc", bytes_read: 100, output: output)
       lines = formatted.split("\n")
       # last line is the status footer
       expect(lines.last).to eq("… waiting")
@@ -736,6 +736,36 @@ RSpec.describe Octo::Tools::Terminal do
       expect(tool.send(:slow_command?, "NODE_ENV=production npm run build")).to eq(true)
     end
 
+    it "recognises the expanded pattern coverage (Tier 1)" do
+      # Make-family
+      expect(tool.send(:slow_command?, "make test")).to eq(true)
+      expect(tool.send(:slow_command?, "make install")).to eq(true)
+      expect(tool.send(:slow_command?, "cmake --build build")).to eq(true)
+      # Node — variants beyond install/run-build
+      expect(tool.send(:slow_command?, "npm ci")).to eq(true)
+      expect(tool.send(:slow_command?, "npm test")).to eq(true)
+      expect(tool.send(:slow_command?, "yarn test")).to eq(true)
+      expect(tool.send(:slow_command?, "pnpm dev")).to eq(true)
+      # JVM
+      expect(tool.send(:slow_command?, "gradle test")).to eq(true)
+      expect(tool.send(:slow_command?, "gradle assemble")).to eq(true)
+      # .NET / Elixir / PHP / Swift
+      expect(tool.send(:slow_command?, "dotnet test")).to eq(true)
+      expect(tool.send(:slow_command?, "mix test")).to eq(true)
+      expect(tool.send(:slow_command?, "composer install")).to eq(true)
+      expect(tool.send(:slow_command?, "swift test")).to eq(true)
+      # Infra
+      expect(tool.send(:slow_command?, "terraform plan")).to eq(true)
+      expect(tool.send(:slow_command?, "kubectl apply -f deploy.yaml")).to eq(true)
+      expect(tool.send(:slow_command?, "ansible-playbook site.yml")).to eq(true)
+      # Python variants
+      expect(tool.send(:slow_command?, "pip3 install requests")).to eq(true)
+      expect(tool.send(:slow_command?, "python -m pytest tests/")).to eq(true)
+      # Go / cargo
+      expect(tool.send(:slow_command?, "cargo install ripgrep")).to eq(true)
+      expect(tool.send(:slow_command?, "go install ./...")).to eq(true)
+    end
+
     it "does not misfire on quick commands" do
       expect(tool.send(:slow_command?, "ls -la")).to eq(false)
       expect(tool.send(:slow_command?, "echo hello")).to eq(false)
@@ -749,10 +779,10 @@ RSpec.describe Octo::Tools::Terminal do
       # actual run, only that auto-tuning kicked in — so we stub do_start
       # to return immediately.
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, async:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
-        captured[:background] = background
+        captured[:async] = async
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
@@ -760,38 +790,93 @@ RSpec.describe Octo::Tools::Terminal do
 
       expect(captured[:timeout]).to eq(Octo::Tools::Terminal::SLOW_COMMAND_TIMEOUT)
       expect(captured[:idle_ms]).to eq(Octo::Tools::Terminal::DISABLED_IDLE_MS)
-      expect(captured[:background]).to eq(false)
+      # The flag the caller passed; transparent async happens INSIDE do_start
+      # by checking slow_command?, not by execute() flipping the flag for us.
+      expect(captured[:async]).to eq(false)
     end
 
-    it "respects caller-supplied timeout/idle_ms even for slow commands" do
+    it "does NOT auto-tune async launches" do
       captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
+      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, async:, max_duration: nil|
         captured[:timeout] = timeout
         captured[:idle_ms] = idle_ms
+        captured[:async] = async
         { exit_code: 0, output: "", bytes_read: 0 }
       end
 
-      tool.execute(command: "rspec spec/", timeout: 30, idle_ms: 500)
+      tool.execute(command: "bundle exec rspec", async: true)
 
-      expect(captured[:timeout]).to eq(30)
-      expect(captured[:idle_ms]).to eq(500)
-    end
-
-    it "does NOT auto-tune background launches" do
-      captured = {}
-      allow(tool).to receive(:do_start) do |_cmd, cwd:, env:, timeout:, idle_ms:, background:|
-        captured[:timeout] = timeout
-        captured[:idle_ms] = idle_ms
-        captured[:background] = background
-        { exit_code: 0, output: "", bytes_read: 0 }
-      end
-
-      tool.execute(command: "bundle exec rspec", background: true)
-
-      expect(captured[:background]).to eq(true)
+      expect(captured[:async]).to eq(true)
       expect(captured[:timeout]).to eq(Octo::Tools::Terminal::DEFAULT_TIMEOUT)
-      # background leaves idle_ms at whatever default the caller wanted —
-      # in practice wait_and_package disables idle for backgrounds anyway.
+      # async leaves idle_ms at whatever default the caller wanted — in
+      # practice the async path uses BACKGROUND_COLLECT_SECONDS / DISABLED_IDLE_MS
+      # internally regardless.
+    end
+  end
+
+  describe "transparent async (slow commands → fire-and-forget under the hood)" do
+    before { Octo::BackgroundTaskRegistry.reset! }
+    after  { Octo::BackgroundTaskRegistry.reset! }
+
+    let(:fake_log_file) { "/tmp/octo-terminals-test/42.log" }
+    let(:fake_session) do
+      Struct.new(:id, :pid, :writer, :reader, :log_io, :read_offset, :marker_regex, :marker_token, :exit_code, :log_file, :mutex)
+        .new(7, 99_999, double(close: nil), double(close: nil), double(close: nil), 0, nil, nil, nil, fake_log_file, Mutex.new)
+    end
+
+    it "auto-routes a slow_command to the async path and returns a handle" do
+      # Stub the spawn/wait chain so we don't fork a real process.
+      allow(tool).to receive(:spawn_dedicated_session).and_return(fake_session)
+      allow(tool).to receive(:write_user_command).and_return(nil)
+      allow(tool).to receive(:wait_and_package).and_return(
+        session_id: fake_session.id,
+        state: "background",
+        output: "starting npm install...",
+        bytes_read: 100
+      )
+      allow(tool).to receive(:start_background_watcher).and_return(nil)
+
+      out = tool.execute(command: "npm install")
+
+      expect(out[:accepted]).to    eq(true)
+      expect(out[:state]).to       eq("running")
+      expect(out[:handle_id]).to   be_a(String)
+      expect(out[:output_file]).to eq(fake_log_file)
+      expect(out[:message]).to     include("notification")
+
+      # Registry recorded the task with the right metadata.
+      task = Octo::BackgroundTaskRegistry.get(out[:handle_id])
+      expect(task[:metadata][:agent_session_id]).to eq(tool.agent_session_id)
+      expect(task[:metadata][:internal_session_id]).to eq(fake_session.id)
+      expect(task[:metadata][:watched]).to eq(true)
+    end
+
+    it "takes the async path when explicit async: true is set, even for non-slow commands" do
+      allow(tool).to receive(:spawn_dedicated_session).and_return(fake_session)
+      allow(tool).to receive(:write_user_command).and_return(nil)
+      allow(tool).to receive(:wait_and_package).and_return(
+        session_id: fake_session.id, state: "background", output: "", bytes_read: 0
+      )
+      allow(tool).to receive(:start_background_watcher).and_return(nil)
+
+      out = tool.execute(command: "sleep 60", async: true)
+      expect(out[:accepted]).to  eq(true)
+      expect(out[:handle_id]).to be_a(String)
+      expect(out[:state]).to     eq("running")
+    end
+
+    it "returns the sync result if the slow command actually finishes inside the startup window" do
+      allow(tool).to receive(:spawn_dedicated_session).and_return(fake_session)
+      allow(tool).to receive(:write_user_command).and_return(nil)
+      # state != "background" means the command exited inside the 2s window.
+      allow(tool).to receive(:wait_and_package).and_return(
+        exit_code: 0, output: "tests passed in 1.2s", bytes_read: 100
+      )
+
+      out = tool.execute(command: "rspec spec/")
+      expect(out[:exit_code]).to  eq(0)
+      expect(out[:accepted]).to   be_nil
+      expect(out[:handle_id]).to  be_nil
     end
   end
 
@@ -802,7 +887,7 @@ RSpec.describe Octo::Tools::Terminal do
   # reuse, cooked PTY mode, line-wrap truncation, etc.), the shell echoes
   # back the full wrapper line we inject around every user command:
   #
-  #     { USER_CMD\n}; __octo_ec=$?; printf "\n__OCTO_DONE_<tok>_%s__\n" "$__octo_ec"
+  #     { USER_CMD\n}; __octo_ec=$?; printf "\n__CLACKY_DONE_<tok>_%s__\n" "$__octo_ec"
   #
   # strip_command_echo must remove that echoed wrapper — in all its observed
   # shapes — without ever touching legitimate user output.
@@ -816,7 +901,7 @@ RSpec.describe Octo::Tools::Terminal do
     it "strips a single-line wrapper echo even when the leading `{` was dropped by PTY width-wrap" do
       # Reproduces the real-world report: rails runner command, width-wrapped
       # so the terminal ate the first `{ r`, collapsed \n escapes to spaces.
-      input = %(ails runner script/reconcile_stripe_payments.rb 2>&1 | tail -80 }; __octo_ec=$?; printf " __OCTO_DONE_#{token}_%s__ " "$__octo_ec"\n) \
+      input = %(ails runner script/reconcile_stripe_payments.rb 2>&1 | tail -80 }; __octo_ec=$?; printf " __CLACKY_DONE_#{token}_%s__ " "$__octo_ec"\n) \
               "actual output line 1\n" \
               "actual output line 2\n"
 
@@ -824,13 +909,13 @@ RSpec.describe Octo::Tools::Terminal do
     end
 
     it "strips a multi-line anchored wrapper echo (legacy behaviour, no token needed)" do
-      input = "{ echo hi\n}; __octo_ec=$?; printf \"\n__OCTO_DONE_#{token}_%s__\n\" \"$__octo_ec\"\nhi\n"
+      input = "{ echo hi\n}; __octo_ec=$?; printf \"\n__CLACKY_DONE_#{token}_%s__\n\" \"$__octo_ec\"\nhi\n"
       expect(strip(input, token: token)).to eq("hi\n")
     end
 
     it "strips a wrapper echo that appears mid-stream, not anchored to the start" do
       input = "previous output\n" \
-              "{ echo hi\n}; __octo_ec=$?; printf \"\n__OCTO_DONE_#{token}_%s__\n\" \"$__octo_ec\"\nhi\n"
+              "{ echo hi\n}; __octo_ec=$?; printf \"\n__CLACKY_DONE_#{token}_%s__\n\" \"$__octo_ec\"\nhi\n"
       expect(strip(input, token: token)).to eq("previous output\nhi\n")
     end
 
@@ -841,14 +926,14 @@ RSpec.describe Octo::Tools::Terminal do
 
     it "strips a wrapper-shaped echo even when the token is different or missing" do
       # PTY width-wrap can truncate the token or even the entire
-      # `__OCTO_DONE_..._%s__` format out of the printf format argument.
+      # `__CLACKY_DONE_..._%s__` format out of the printf format argument.
       # The `}; __octo_ec=$?; printf ... "$__octo_ec"` fingerprint is
       # unique enough that we strip it on sight regardless of token.
-      input = "real output\n{ echo hi\n}; __octo_ec=$?; printf \"\n__OCTO_DONE_OTHER_%s__\n\" \"$__octo_ec\"\nhi\n"
+      input = "real output\n{ echo hi\n}; __octo_ec=$?; printf \"\n__CLACKY_DONE_OTHER_%s__\n\" \"$__octo_ec\"\nhi\n"
       expect(strip(input, token: token)).to eq("real output\n{ echo hi\nhi\n")
     end
 
-    it "strips a wrapper echo where the __OCTO_DONE marker format was truncated away entirely" do
+    it "strips a wrapper echo where the __CLACKY_DONE marker format was truncated away entirely" do
       # Real-world: rails / cat commands so long that PTY width-wrap
       # shredded the printf format, leaving only `printf \" \" \"$__octo_ec\"`
       # with the marker gone. Token-aware patterns don't match this, so
@@ -866,7 +951,7 @@ RSpec.describe Octo::Tools::Terminal do
     end
 
     it "falls back to the legacy anchored strip when no token is supplied" do
-      input = "{ echo hi\n}; __octo_ec=$?; printf \"\n__OCTO_DONE_xxx_%s__\n\" \"$__octo_ec\"\nhi\n"
+      input = "{ echo hi\n}; __octo_ec=$?; printf \"\n__CLACKY_DONE_xxx_%s__\n\" \"$__octo_ec\"\nhi\n"
       expect(strip(input, token: nil)).to eq("hi\n")
     end
 
@@ -962,6 +1047,117 @@ RSpec.describe Octo::Tools::Terminal do
 
       expect(result[:exit_code]).to eq(0)
       expect(result[:output]).to eq("hello world")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Async (handle-based) path — long-running tasks started with async: true
+  # ---------------------------------------------------------------------------
+  describe "async (handle-based) path" do
+    before do
+      Octo::BackgroundTaskRegistry.reset!
+    end
+
+    after do
+      Octo::BackgroundTaskRegistry.reset!
+    end
+
+    it "returns accepted: true with a handle_id for a running command" do
+      result = tool.execute(command: "sleep 5", async: true)
+      expect(result[:accepted]).to be true
+      expect(result[:handle_id]).to match(/\A[a-z0-9]{9}\z/)
+      expect(result[:state]).to eq("running")
+      expect(result[:output_file]).to be_a(String)
+      expect(result[:message]).to include("<task-notification>")
+      expect(result[:startup_output]).to be_a(String)
+    end
+
+    it "rejects async:true for obviously quick commands" do
+      result = tool.execute(command: "ls -la", async: true)
+      expect(result[:error]).to include("async:true is for long-running tasks")
+      expect(result[:hint]).to include("ls, cat, pwd, echo")
+    end
+
+    it "does not reject cd-prefixed commands that chain a long runner" do
+      result = tool.execute(command: "cd /tmp \u0026\u0026 bundle exec rspec", async: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+
+      result = tool.execute(command: "cd /tmp; make install", async: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+    end
+
+    it "does not reject env-prefixed or sudo-prefixed long commands" do
+      result = tool.execute(command: "FOO=bar bundle exec rspec", async: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+
+      result = tool.execute(command: "sudo apt-get update", async: true)
+      expect(result[:error].to_s).not_to include("looks quick")
+    end
+
+    it "returns the failure directly if the command crashes during the startup window" do
+      result = tool.execute(command: "false", async: true)
+      # `false` exits immediately; the startup window catches it
+      expect(result[:accepted]).to be_falsy
+      expect(result[:exit_code]).to eq(1)
+    end
+
+    it "registers a task that can be queried by handle_id" do
+      result = tool.execute(command: "sleep 10", async: true)
+      handle_id = result[:handle_id]
+
+      query = tool.execute(handle_id: handle_id)
+      expect(query[:state]).to eq("running")
+      expect(query[:command]).to eq("sleep 10")
+      expect(query[:elapsed_seconds]).to be_a(Integer)
+
+      # Cancel so we don't leak
+      tool.execute(handle_id: handle_id, kill: true)
+    end
+
+    it "cancels a running async task and reports it as killed" do
+      result = tool.execute(command: "sleep 30", async: true)
+      handle_id = result[:handle_id]
+
+      cancel = tool.execute(handle_id: handle_id, kill: true)
+      expect(cancel[:killed]).to be true
+      expect(cancel[:handle_id]).to eq(handle_id)
+
+      # Give the registry a moment to process
+      sleep 0.2
+      task = Octo::BackgroundTaskRegistry.get(handle_id)
+      expect(task[:status]).to eq("cancelled")
+    end
+
+    it "returns error for querying a non-existent handle" do
+      result = tool.execute(handle_id: "nonexistent-uuid")
+      expect(result[:error]).to include("not found")
+    end
+
+    it "returns error for cancelling an already-completed task" do
+      # Start a task, wait for it to finish, then try to cancel.
+      # We use a short sleep so it goes through the async path
+      # (exits after the startup window).
+      result = tool.execute(command: "sleep 0.8", async: true)
+      expect(result[:accepted]).to be true
+      handle_id = result[:handle_id]
+
+      # Wait long enough for the task to finish and watcher to complete it
+      sleep 2
+
+      cancel = tool.execute(handle_id: handle_id, kill: true)
+      expect(cancel[:error]).to include("not found or already completed")
+    end
+
+    it "uses max_duration from metadata for the watcher timeout" do
+      # We can't easily test the full watcher timeout, but we can verify
+      # the task metadata stores the value.
+      result = tool.execute(command: "sleep 5", async: true, max_duration: 300)
+      handle_id = result[:handle_id]
+
+      task = Octo::BackgroundTaskRegistry.get(handle_id)
+      expect(task[:metadata][:max_duration]).to eq(300)
+
+      tool.execute(handle_id: handle_id, kill: true)
     end
   end
 

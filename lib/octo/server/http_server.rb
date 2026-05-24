@@ -19,6 +19,7 @@ require_relative "scheduler"
 require_relative "channel"
 require_relative "../banner"
 require_relative "../utils/file_processor"
+require_relative "../background_task_registry"
 
 module Octo
   module Server
@@ -2736,6 +2737,9 @@ module Octo
                 end
               end
             end
+            # Push the current background-task badge so a refreshed tab doesn't
+            # lose track of in-flight async tasks.
+            _push_background_tasks_snapshot(session_id, conn)
           else
             conn.send_json(type: "error", message: "Session not found: #{session_id}")
           end
@@ -2832,6 +2836,22 @@ module Octo
         ui = nil
         @registry.with_session(session_id) { |s| ui = s[:ui] }
         ui&.deliver_confirmation(conf_id, result)
+      end
+
+      # Push a fresh background-tasks snapshot to a newly subscribed WS
+      # client so the badge survives page refresh. Mirrors the format
+      # produced by WebUiController#update_background_tasks.
+      private def _push_background_tasks_snapshot(session_id, conn)
+        now = Time.now
+        tasks = BackgroundTaskRegistry.list_running(agent_session_id: session_id).map do |t|
+          cmd = (t[:command] || "").to_s
+          cmd = "#{cmd[0, 80]}…" if cmd.length > 80
+          elapsed = t[:started_at] ? (now - t[:started_at]).round : 0
+          { handle_id: t[:handle_id].to_s, command: cmd, elapsed: elapsed }
+        end
+        conn.send_json(type: "background_tasks_update", session_id: session_id, running: tasks.size, tasks: tasks)
+      rescue => e
+        Octo::Logger.warn("[WS] background_tasks_snapshot error: #{e.message}")
       end
 
       # Interrupt a running agent session.

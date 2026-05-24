@@ -122,6 +122,10 @@ module Octo
     # === State updates ===
     def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil); end
     def update_todos(todos); end
+
+    def update_background_tasks(running: 0, tasks: []); end
+    def show_background_task_notice(command: nil, handle_id: nil, status: "success"); end
+
     def set_working_status; end
     def set_idle_status; end
 

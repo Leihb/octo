@@ -8107,3 +8107,101 @@ body.setup-mode[data-theme="dark"] {
   margin-top: 0.25rem;
   white-space: nowrap;
 }
+
+/* ── Background-task badge in #session-info-bar ──────────────────────── */
+.sib-bgtasks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--color-bg-tertiary, rgba(120, 120, 120, 0.12));
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: default;
+  user-select: none;
+}
+.sib-bgtasks .bgtasks-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+  animation: bgtasks-pulse 1.4s ease-out infinite;
+}
+@keyframes bgtasks-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0);   }
+}
+
+.sib-bgtasks-popover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 260px;
+  max-width: 500px;
+  padding: 6px 0;
+  background: var(--color-bg-primary, #fff);
+  border: 1px solid var(--color-border-primary, #e0e0e0);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.sib-bgtasks-popover-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px;
+}
+.sib-bgtasks-popover-row:not(:last-child) {
+  border-bottom: 1px solid var(--color-border-secondary, #f0f0f0);
+}
+.sib-bgtasks-popover-cmd {
+  font-family: var(--font-mono, "SF Mono", "Menlo", monospace);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.sib-bgtasks-popover-elapsed {
+  color: var(--color-text-tertiary, #999);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Background-task transition bubble in #messages ──────────────────── */
+.msg-bgtask-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--color-border-primary, #ccc);
+  background: var(--color-bg-secondary, rgba(120, 120, 120, 0.05));
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+  border-radius: 4px;
+  opacity: 0.9;
+}
+.msg-bgtask-notice .bgtask-icon  { flex: 0 0 auto; font-weight: 600; }
+.msg-bgtask-notice .bgtask-text  { flex: 0 0 auto; }
+.msg-bgtask-notice .bgtask-cmd   {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  background: rgba(120, 120, 120, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-bgtask-notice .bgtask-id    {
+  flex: 0 0 auto;
+  opacity: 0.6;
+  font-size: 11px;
+}

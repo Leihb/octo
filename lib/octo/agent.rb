@@ -24,6 +24,7 @@ require_relative "agent/next_message_suggester"
 require_relative "agent/skill_evolution"
 require_relative "agent/skill_reflector"
 require_relative "agent/skill_auto_creator"
+require_relative "background_task_registry"
 
 module Octo
   class Agent
@@ -105,9 +106,10 @@ module Octo
       @pending_script_tmpdirs = [] # Decrypted-script tmpdirs to shred when agent.run completes
       @pending_error_rollback = false  # Deferred rollback flag set by restore_session on error
       @in_run_loop = false         # True while agent.run() is active (set under @state_mutex)
-      # Unified inbox for user messages that should land in @history at the
-      # next iteration boundary inside the run loop. Items structure:
-      #   {kind: :user_msg, content:, files:, enqueued_at:}
+      # Unified inbox for events that should land in @history at the next
+      # iteration boundary inside the run loop. Items are typed:
+      #   {kind: :bg_notification, content:, bubble:, enqueued_at:}
+      #   {kind: :user_msg,        content:, files:, enqueued_at:}
       # Drained chronologically by drain_inbox_into_history! (run loop top).
       @inbox = []
       @inbox_run_pending = false   # Set true after enqueue_user_message decides to spawn a run; cleared at run() entry. Dedupes concurrent spawns.
@@ -227,10 +229,26 @@ module Octo
     #                              the inbox drain at iteration top is expected
     #                              to find something. If the inbox is also empty,
     #                              the loop exits immediately (no wasted LLM call).
-    def run(user_input = nil, files: [])
+    def run(user_input = nil, files: [], system_notification: nil, _bg_enqueued_at: nil)
+      # 救法 1: bg-notification runs carry their enqueue timestamp. If a user
+      # interrupt has bumped @discard_threshold past that timestamp, the
+      # notification's "ticket" is stale — drop it before we grab the heavy
+      # @run_mutex (which a real user message may be waiting behind us for).
+      if system_notification && _bg_enqueued_at
+        @state_mutex.synchronize do
+          return if @discard_threshold && _bg_enqueued_at < @discard_threshold
+        end
+      end
+
       # Serialize every Agent#run invocation so concurrent callers cannot
       # mutate @history, @iterations, etc. simultaneously.
       @run_mutex.synchronize do
+        if system_notification && _bg_enqueued_at
+          @state_mutex.synchronize do
+            return if @discard_threshold && _bg_enqueued_at < @discard_threshold
+          end
+        end
+
         @state_mutex.synchronize do
           @in_run_loop = true
           @current_run_thread = Thread.current
@@ -242,7 +260,7 @@ module Octo
 
         # Drain-only mode: no direct input, and nothing queued either. Don't
         # bother the LLM with an empty turn.
-        if user_input.nil?
+        if user_input.nil? && system_notification.nil?
           empty_inbox = @state_mutex.synchronize { @inbox.empty? }
           if empty_inbox
             @state_mutex.synchronize do
@@ -310,25 +328,32 @@ module Octo
       # Inject chunk index card if archived chunks exist and index is stale
       inject_chunk_index_if_needed
 
-      if user_input.nil? || user_input.empty?
+      if system_notification
+        # System notification mode — triggered by background task completion.
+        # Skip all user input processing; inject the notification directly.
+        @history.append({
+          role: "user",
+          content: system_notification,
+          system_injected: true,
+          task_id: task_id,
+          created_at: Time.now.to_f
+        })
+      elsif user_input.nil? || user_input.empty?
         # Drain-only mode: nothing to append now. The iteration drain at the
         # top of the loop will pick up whatever's in @inbox (which is why we
         # were started — see http_server's follow-up run spawn).
       else
         # Normal user message mode — files may or may not be attached.
-        # Both branches end with the same append shape; the only difference
-        # is whether file processing is needed.
         processed = process_files_for_user_message(user_input, files)
         append_processed_user_message_to_history!(processed, task_id)
 
         # If the user typed a slash command targeting a skill with disable-model-invocation: true,
         # inject the skill content as a synthetic assistant message so the LLM can act on it.
         # Skills already in the system prompt (model_invocation_allowed?) are skipped.
-        # Only relevant when there's actual user input — drain-only mode has nothing to inject.
         inject_skill_command_as_assistant_message(user_input, task_id)
       end
 
-      @hooks.trigger(:on_start, user_input)
+      @hooks.trigger(:on_start, system_notification ? "[background task notification]" : user_input)
 
       begin
         # Track if request_user_feedback was called
@@ -576,6 +601,19 @@ module Octo
         # Fire-and-forget telemetry after every agent run.
         # Tracks daily active users (distinct devices per day) and task volume.
         Octo::Telemetry.task!
+
+        # Reap stale completed background tasks so the registry doesn't grow
+        # unboundedly across a long session.
+        begin
+          BackgroundTaskRegistry.prune_completed(max_age: 3_600, agent_session_id: @session_id)
+        rescue => e
+          Octo::Logger.error("background_task_prune_error", error: e)
+        end
+
+        # If an inbox item arrived during the ensure block — i.e. AFTER the
+        # last in-loop drain but BEFORE we released @run_mutex — handle it
+        # on a fresh thread so we don't block the caller.
+        flush_inbox_after_run
       end
       end  # @run_mutex.synchronize
     end
@@ -593,9 +631,32 @@ module Octo
         @inbox.clear
       end
 
+      # Coalesce consecutive bg notifications into one system_injected msg
+      bg_bubbles = []
+      bg_bodies  = []
+
+      flush_bg = lambda do
+        next if bg_bodies.empty?
+        bg_bubbles.each { |b| emit_bubble_for_notification(b) }
+        @history.append({
+          role:            "user",
+          content:         bg_bodies.join("\n\n"),
+          system_injected: true,
+          task_id:         task_id,
+          created_at:      Time.now.to_f
+        })
+        bg_bubbles = []
+        bg_bodies  = []
+      end
+
       items.each do |item|
         case item[:kind]
+        when :bg_notification
+          bg_bubbles << item[:bubble]
+          bg_bodies  << format_notification_for_history(item[:content])
         when :user_msg
+          flush_bg.call
+
           created_at = item[:enqueued_at] || Time.now
 
           if item[:processed]
@@ -620,9 +681,12 @@ module Octo
           Octo::Logger.warn("agent.unknown_inbox_kind", kind: item[:kind])
         end
       end
+      flush_bg.call
 
-      remaining = @state_mutex.synchronize { @inbox.count { |i| i[:kind] == :user_msg } }
-      broadcast_user_message_queue_status(remaining)
+      if items.any? { |i| i[:kind] == :user_msg }
+        remaining = @state_mutex.synchronize { @inbox.count { |i| i[:kind] == :user_msg } }
+        broadcast_user_message_queue_status(remaining)
+      end
 
       Octo::Logger.info("agent.inbox_drained",
         session_id: @session_id,
@@ -632,9 +696,7 @@ module Octo
       true
     rescue => e
       # Drain failed partway through: unprocessed items are lost from @inbox
-      # because we cleared it before the loop. Re-queue the survivors so the
-      # next run (or a fresh spawn) can retry them.
-      processed_count = items.size - items.compact.size
+      # because we cleared it before the loop. Re-queue the survivors.
       survivors = items.compact
       unless survivors.empty?
         @state_mutex.synchronize do
@@ -649,7 +711,6 @@ module Octo
       Octo::Logger.error("agent.drain_inbox_error",
         session_id:    @session_id,
         error:         e,
-        processed:     processed_count,
         survivors:     survivors.size
       )
       false
@@ -791,6 +852,200 @@ module Octo
         session_id: @session_id,
         error: e
       )
+    end
+
+    # Called by BackgroundTaskRegistry when a fire-and-forget background task
+    # completes. Two delivery paths depending on agent state:
+    #   - Agent is mid-run  → enqueue; the per-iteration drain picks it up
+    #   - Agent is idle     → start a fresh run on the caller's thread
+    def resume_with_notification(notification_content, bubble: nil)
+      enqueue_at = Time.now
+      should_run = false
+
+      @state_mutex.synchronize do
+        if @in_run_loop
+          @inbox << {
+            kind:        :bg_notification,
+            content:     notification_content,
+            bubble:      bubble,
+            enqueued_at: enqueue_at
+          }
+          Octo::Logger.info("agent.notification_queued",
+            session_id: @session_id,
+            queue_size: @inbox.size
+          )
+          return
+        end
+        should_run = true
+      end
+
+      return unless should_run
+
+      emit_bubble_for_notification(bubble)
+
+      formatted = format_notification_for_history(notification_content)
+      run("", system_notification: formatted, _bg_enqueued_at: enqueue_at)
+    end
+
+    # Drain any items queued during this run's ensure window (after the last
+    # in-loop drain but before @run_mutex was released).
+    private def flush_inbox_after_run
+      drain_target = nil
+      @state_mutex.synchronize do
+        drain_target = @inbox.find { |i| i[:kind] == :user_msg } || @inbox.first
+      end
+      return unless drain_target
+
+      case drain_target[:kind]
+      when :user_msg
+        Thread.new do
+          Thread.current.name = "inbox-flush-user-#{@session_id[0, 8]}"
+          begin
+            run
+          rescue => e
+            Octo::Logger.error("agent.flush_inbox_user_error",
+              session_id: @session_id,
+              error: e
+            )
+          end
+        end
+      when :bg_notification
+        item = nil
+        @state_mutex.synchronize do
+          idx = @inbox.find_index { |i| i[:kind] == :bg_notification }
+          item = @inbox.delete_at(idx) if idx
+        end
+        return unless item
+        Thread.new do
+          Thread.current.name = "inbox-flush-bg-#{@session_id[0, 8]}"
+          begin
+            resume_with_notification(item[:content], bubble: item[:bubble])
+          rescue => e
+            Octo::Logger.error("agent.flush_inbox_bg_error",
+              session_id: @session_id,
+              error: e
+            )
+          end
+        end
+      end
+    end
+
+    private def format_notification_for_history(content)
+      <<~MSG.strip
+        [SYSTEM NOTIFICATION - NOT USER INPUT]
+        This is an automated background-task event, NOT a message from the user.
+        Do NOT interpret this as user acknowledgement, confirmation, or response
+        to any pending question.
+
+        <task-notification>
+        #{content}
+        </task-notification>
+      MSG
+    end
+
+    private def emit_bubble_for_notification(bubble)
+      return unless bubble && @ui
+      @ui.show_background_task_notice(
+        command: bubble[:command],
+        handle_id: bubble[:handle_id],
+        status: bubble[:status]
+      )
+    rescue => e
+      Octo::Logger.error("agent.bubble_emit_error",
+        session_id: @session_id,
+        error: e
+      )
+    end
+
+    private def broadcast_background_tasks_snapshot
+      return unless @ui
+
+      now = Time.now
+      snapshot = BackgroundTaskRegistry.list_running(agent_session_id: @session_id).map do |t|
+        elapsed = t[:started_at] ? (now - t[:started_at]).round : 0
+        {
+          handle_id:  t[:handle_id],
+          command:    t[:command],
+          started_at: t[:started_at],
+          elapsed:    elapsed
+        }
+      end
+      @ui.update_background_tasks(running: snapshot.size, tasks: snapshot)
+    rescue => e
+      Octo::Logger.error("agent.broadcast_bg_tasks_error",
+        session_id: @session_id,
+        error: e
+      )
+    end
+
+    private def format_terminal_notification(task_result, tool_use_id: nil)
+      handle_id       = task_result[:handle_id]
+      command         = task_result[:command]
+      output_file     = task_result[:output_file]
+      elapsed_seconds = task_result[:elapsed_seconds]
+
+      broadcast_background_tasks_snapshot
+
+      status, summary = derive_status_and_summary(task_result, command)
+
+      parts = []
+      parts << "<task-id>#{handle_id}</task-id>"            if handle_id
+      parts << "<tool-use-id>#{tool_use_id}</tool-use-id>"  if tool_use_id
+      parts << "<command>#{command}</command>"              if command
+      parts << "<status>#{status}</status>"
+      if task_result[:exit_code]
+        parts << "<exit-code>#{task_result[:exit_code]}</exit-code>"
+      end
+      if elapsed_seconds
+        parts << "<elapsed-seconds>#{elapsed_seconds}</elapsed-seconds>"
+      end
+      parts << "<output-file>#{output_file}</output-file>"  if output_file
+      if task_result[:full_output_file]
+        parts << "<full-output-file>#{task_result[:full_output_file]}</full-output-file>"
+      end
+      parts << "<summary>#{summary}</summary>"
+
+      siblings = BackgroundTaskRegistry.list_running(agent_session_id: @session_id)
+      if siblings.any?
+        sibling_lines = siblings.map do |s|
+          cmd = s[:command].to_s
+          cmd = cmd.length > 60 ? "#{cmd[0, 57]}..." : cmd
+          elapsed = s[:started_at] ? (Time.now - s[:started_at]).round : nil
+          elapsed_s = elapsed ? "#{elapsed}s" : "?"
+          "  <sibling-task><handle-id>#{s[:handle_id]}</handle-id><command>#{cmd}</command><elapsed>#{elapsed_s}</elapsed></sibling-task>"
+        end
+        parts << "<sibling-tasks>\n#{sibling_lines.join("\n")}\n</sibling-tasks>"
+      end
+
+      {
+        content: parts.join("\n"),
+        bubble:  { command: command, handle_id: handle_id, status: status }
+      }
+    end
+
+    private def derive_status_and_summary(task_result, command)
+      cmd_label = command ? "`#{command}`" : "background terminal task"
+      last_line = last_nonempty_line(task_result[:output])
+
+      if task_result[:cancelled]
+        ["cancelled", "#{cmd_label} cancelled by user"]
+      elsif task_result[:error]
+        ["error", "#{cmd_label} watcher error: #{task_result[:error]}"]
+      elsif task_result[:exit_code]
+        verb = task_result[:exit_code].zero? ? "exited 0" : "exited #{task_result[:exit_code]}"
+        body = "#{cmd_label} #{verb}"
+        body = "#{body} — last: #{last_line.inspect}" if last_line
+        [(task_result[:exit_code].zero? ? "success" : "failed"), body]
+      else
+        ["success", "#{cmd_label} completed"]
+      end
+    end
+
+    private def last_nonempty_line(output)
+      return nil if output.nil? || output.to_s.empty?
+      line = output.to_s.lines.map(&:chomp).reject { |l| l.strip.empty? }.last
+      return nil if line.nil? || line.empty?
+      line.length > 200 ? "#{line[0, 200]}…" : line
     end
 
     private def think
@@ -978,19 +1233,6 @@ module Octo
       response
     end
 
-    # Abort the current iteration if this thread no longer owns the task.
-    # A new user message starts a fresh task on a new thread; the old thread
-    # may still be blocked inside a long-running tool (e.g. a subagent that
-    # didn't observe Thread#raise from interrupt_session). Calling this at
-    # safe checkpoints — before LLM calls and before appending tool results
-    # to history — guarantees a stale thread cannot corrupt history with
-    # tool messages that no longer have a matching assistant tool_calls.
-    private def check_stale!
-      return unless @task_thread
-      return if Thread.current == @task_thread
-      raise Octo::AgentInterrupted, "Task superseded by a newer task on another thread"
-    end
-
     private def act(tool_calls)
       return { denied: false, feedback: nil, tool_results: [], awaiting_feedback: false } unless tool_calls
 
@@ -1124,6 +1366,20 @@ module Octo
           # Track modified files for Time Machine snapshots
           track_modified_files(call[:name], args)
 
+          # If a terminal tool was started in async mode, register a callback
+          # so the agent is resumed when the task completes.
+          if call[:name] == "terminal" && result.is_a?(Hash) && result[:accepted] && result[:handle_id]
+            tool_use_id = call[:id]
+            BackgroundTaskRegistry.register_callback(
+              handle_id: result[:handle_id],
+              agent: self
+            ) do |task_result|
+              notification = format_terminal_notification(task_result, tool_use_id: tool_use_id)
+              resume_with_notification(notification[:content], bubble: notification[:bubble])
+            end
+            broadcast_background_tasks_snapshot
+          end
+
           # Hook: after_tool_use
           @hooks.trigger(:after_tool_use, call, result)
 
@@ -1189,11 +1445,6 @@ module Octo
       # Add tool results as messages
       # Use Client to format results based on API type (Anthropic vs OpenAI)
       return if tool_results.empty?
-
-      # Refuse to write tool results if this thread is stale (a newer task
-      # has taken over). Otherwise the tool message would be appended with
-      # the new task's @current_task_id, orphaned from its assistant.
-      check_stale!
 
       formatted_messages = @client.format_tool_results(response, tool_results, model: current_model)
       formatted_messages.each { |msg| @history.append(msg.merge(task_id: @current_task_id)) }
@@ -1306,7 +1557,7 @@ module Octo
     end
 
     private def register_builtin_tools
-      @tool_registry.register(Tools::Terminal.new)
+      @tool_registry.register(Tools::Terminal.new(agent_session_id: @session_id))
       @tool_registry.register(Tools::FileReader.new)
       @tool_registry.register(Tools::Write.new)
       @tool_registry.register(Tools::Edit.new)

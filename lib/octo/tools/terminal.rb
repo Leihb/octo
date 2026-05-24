@@ -9,6 +9,7 @@ require_relative "../utils/trash_directory"
 require_relative "terminal/session_manager"
 require_relative "terminal/output_cleaner"
 require_relative "terminal/persistent_session"
+require_relative "../background_task_registry"
 
 module Octo
   module Tools
@@ -66,29 +67,59 @@ module Octo
       self.tool_description = <<~DESC.strip
         Run shell commands via PTY. Safety: rm→trash, sudo blocked, secrets protected.
 
-        Shapes:
-          {command}                       run + wait
-          {command, background:true}      long-running; returns session_id after ~2s if alive
-          {session_id, input:"pw\n"}      reply to prompt / poll (input:"")
-          {session_id, kill:true}         stop
+        Two modes:
+          {command}                  DEFAULT — sync. Quick commands return {exit_code, output} immediately. Slow build/test/install commands are auto-routed to async by the harness (you get a handle, see below). Hits idle on an interactive prompt → also returns a handle.
+          {command, async:true}      Async — never blocks. Use for a long task you intend to leave running (build, deploy, side quest). Returns a handle.
 
-        Response: exit_code = done; session_id = running (state: waiting/background/timeout).
-        If output exceeds the limit, `output` is truncated and `full_output_file` points
-        at a file on disk — use terminal(command: "grep ... <path>") to search it.
+        Five operations on an existing handle:
+          {handle_id}                            Query status. Returns {state, command, elapsed_seconds, output_file, exit_code (if exited)}.
+          {handle_id, input:"y\n"}               Send input to the PTY + poll for new output. Use to answer prompts, drive REPLs, etc.
+          {handle_id, kill:true}                 Terminate the underlying process and free the handle.
+          Read(output_file)                      Read the raw PTY log file directly — fastest way to peek at progress mid-flight. (output_file path is in every handle response.)
+          (wait for notification)                A <task-notification> with the same handle_id is pushed to your context when the task exits — you don't need to poll.
+
+        Response shape:
+          - sync completes → {exit_code, output, state:"exited"}
+          - sync hits idle (prompt waiting) → {handle_id, state:"waiting", output, output_file}
+          - async accepted → {accepted:true, handle_id, state:"running", output_file, startup_output}
+          - handle query/input → {handle_id, state, ...} plus exit_code if state=="exited"
+
+        If output exceeds the limit, `output` is truncated and `full_output_file`
+        points at a file on disk — use terminal(command: "grep ... <path>") to search it.
         input supports byte escapes: \x03 Ctrl-C, \x04 Ctrl-D, \t Tab, \x1b Esc.
+
+        GUIDANCE:
+          - Default to sync. The harness recognises build/test/install patterns and
+            auto-switches them to async — you don't need to think about it.
+          - Use async:true when you want to fire off a long task and continue with
+            unrelated work (you'll get a notification on completion). Also use it
+            for dev servers, watchers, REPLs you need to control later — same flag,
+            same handle.
+          - Never poll a handle in a tight loop — wait for the notification, or
+            Read(output_file) once if you really need to peek.
       DESC
       self.tool_category = "system"
+
+      # agent_session_id is injected by the Agent that owns this tool instance.
+      # It is NOT exposed in tool_parameters — AI agents cannot set it.
+      attr_reader :agent_session_id
+
+      def initialize(agent_session_id: nil)
+        super()
+        @agent_session_id = agent_session_id
+      end
+
       self.tool_parameters = {
         type: "object",
         properties: {
-          command:    { type: "string",  description: "Shell command. Starts a new run. Mutually exclusive with session_id." },
-          background: { type: "boolean", description: "Expect long-running (dev server, watcher). Returns session_id if still alive after ~2s." },
-          session_id: { type: "integer", description: "Continue a running session. Pair with input or kill." },
-          input:      { type: "string",  description: "Input to running session (usually ends with \n). \"\" = poll." },
-          cwd:        { type: "string",  description: "Working dir for new command." },
-          env:        { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
-          timeout:    { type: "integer", description: "Max seconds to wait (default 60). Ignored when background." },
-          kill:       { type: "boolean", description: "Kill the session_id." }
+          command:      { type: "string",  description: "Shell command to start. Mutually exclusive with handle_id." },
+          async:        { type: "boolean", description: "Run async — return a handle immediately instead of blocking. Use for long tasks you intend to leave running, dev servers, REPLs, or any side-quest you'll pivot away from. Default false (sync, harness still auto-async's slow build/test/install patterns)." },
+          handle_id:    { type: "string",  description: "Reference an existing async task or interactive session. Combine with input: to send input, with kill: to terminate, or use alone to query status. The handle_id is returned in every async / waiting-for-input response." },
+          input:        { type: "string",  description: "Bytes to write to the PTY of the handle_id (usually ends with \\n). Also re-polls for new output. \"\" = poll only." },
+          kill:         { type: "boolean", description: "Terminate the process referenced by handle_id and release the handle." },
+          cwd:          { type: "string",  description: "Working dir for new command." },
+          env:          { type: "object",  description: "Extra env vars for new command.", additionalProperties: { type: "string" } },
+          max_duration: { type: "integer", description: "Hard ceiling (seconds) for an async task before the watcher kills it. Defaults to 7200 (2h). Raise for very long jobs (large docker build, full integration suite)." }
         }
       }
 
@@ -127,6 +158,13 @@ module Octo
       # Background commands collect this many seconds of startup output so
       # the agent can see crashes / readiness before getting the session_id.
       BACKGROUND_COLLECT_SECONDS = 2
+      # Default ceiling for a fire-and-forget background task (fire_and_forget).
+      # Tasks running longer than this are treated as stuck and the watcher
+      # returns a timeout result. Callers can override via metadata[:max_duration].
+      # 2 hours covers large CI suites (full rspec, big docker build, slow
+      # `npm install` on a cold cache) but still bounds resource usage.
+      BACKGROUND_TASK_MAX_DURATION = 7_200
+      IDLE_MAX_DURATION            = 300    # 5 min — abandoned pagers/REPLs
       # Sentinel: when passed as idle_ms, disables idle early-return.
       DISABLED_IDLE_MS = 10_000_000
 
@@ -138,34 +176,74 @@ module Octo
       # the same long-running job 5-10x, replaying full context each time.
       # Taken verbatim from the legacy shell.rb list.
       SLOW_COMMAND_PATTERNS = [
-        "bundle install",
-        "bundle update",
-        "bundle exec rspec",
-        "npm install",
-        "npm run build",
-        "npm run test",
-        "yarn install",
-        "yarn build",
-        "pnpm install",
-        "pnpm build",
-        "rspec",
-        "rake test",
-        "rails test",
-        "cargo build",
-        "cargo test",
-        "go build",
-        "go test",
-        "mvn test",
-        "mvn package",
-        "gradle build",
-        "pytest",
-        "pip install",
-        "docker build",
-        "docker-compose build"
+        # Ruby
+        "bundle install", "bundle update", "bundle exec rspec",
+        "rspec", "rake test", "rails test",
+
+        # Node ecosystem — covers npm / yarn / pnpm test/dev/build/install variants
+        "npm install", "npm ci", "npm test", "npm run build", "npm run test", "npm run dev",
+        "yarn install", "yarn build", "yarn test", "yarn dev",
+        "pnpm install", "pnpm build", "pnpm test", "pnpm dev",
+
+        # Python
+        "pytest", "pip install", "pip3 install", "python -m pip install",
+        "python -m pytest", "python setup.py",
+
+        # Go / Rust
+        "cargo build", "cargo test", "cargo install", "cargo bench",
+        "go build", "go test", "go install", "go mod tidy",
+
+        # JVM (Maven / Gradle)
+        "mvn test", "mvn package", "mvn install",
+        "gradle build", "gradle test", "gradle assemble", "gradle bootRun",
+
+        # .NET / Elixir / PHP / Swift
+        "dotnet build", "dotnet test", "dotnet restore",
+        "mix test", "mix deps.get",
+        "composer install", "composer update",
+        "xcodebuild", "swift test",
+
+        # C / C++ / Make-family
+        "make", "make test", "make install", "make build", "make all",
+        "cmake --build", "cmake -B",
+
+        # Containers / Infra
+        "docker build", "docker-compose build",
+        "terraform plan", "terraform apply",
+        "helm install", "helm upgrade",
+        "kubectl apply", "ansible-playbook", "vagrant up"
       ].freeze
       # Timeout granted to commands matched by SLOW_COMMAND_PATTERNS.
       # 180s matches the legacy safe_shell "hard_timeout" for slow commands.
       SLOW_COMMAND_TIMEOUT = 180
+
+      # Patterns that are obviously quick — using fire_and_forget on these
+      # is almost certainly a mistake and wastes tokens. The harness rejects
+      # such calls at runtime with a clear error so the LLM falls back to
+      # foreground mode.
+      QUICK_COMMAND_PATTERNS = [
+        /\A\s*ls\b/,
+        /\A\s*cd\s/,
+        /\A\s*pwd\b/,
+        /\A\s*cat\s/,
+        /\A\s*echo\b/,
+        /\A\s*head\b/,
+        /\A\s*tail\b/,
+        /\A\s*wc\b/,
+        /\A\s*which\b/,
+        /\A\s*whoami\b/,
+        /\A\s*date\b/,
+        /\A\s*uname\b/,
+        /\A\s*env\b/,
+        /\A\s*clear\b/,
+        /\A\s*history\b/,
+        /\A\s*ps\b/,
+        /\A\s*mkdir\b/,
+        /\A\s*touch\b/,
+        /\A\s*rm\b/,
+        /\A\s*mv\b/,
+        /\A\s*cp\b/
+      ].freeze
 
       # Absolute path to the safe-rm shell snippet shipped with the gem.
       # Sourced by every interactive PTY session to install a `rm` shell
@@ -194,18 +272,17 @@ module Octo
       # ---------------------------------------------------------------------
       # Public entrypoint — dispatches on parameter shape
       # ---------------------------------------------------------------------
-      def execute(command: nil, session_id: nil, input: nil, background: false,
-                  cwd: nil, env: nil, timeout: nil, kill: nil, idle_ms: nil,
-                  working_dir: nil, **_ignored)
-        # Auto-tune: if the caller didn't explicitly set a timeout/idle_ms
-        # AND the command is a well-known long-runner (rspec, bundle install,
-        # cargo build, etc.), we stretch the budget AND disable idle-return.
-        # This collapses what would otherwise be 5-10 "is it still running?"
-        # LLM round-trips into a single synchronous call. Background flag and
-        # session-continuation calls are NOT auto-tuned — background already
-        # returns quickly by design, and continuing a session uses whatever
-        # budget the caller requests.
-        if command && !background && !session_id && slow_command?(command)
+      def execute(command: nil, handle_id: nil, input: nil, async: false,
+                  cwd: nil, env: nil, kill: nil, idle_ms: nil,
+                  working_dir: nil, max_duration: max_duration, **_ignored)
+        # Auto-tune: for well-known long-running commands (rspec, bundle
+        # install, cargo build, etc.), we stretch the budget AND disable
+        # idle-return. This collapses what would otherwise be 5-10
+        # "is it still running?" LLM round-trips into a single synchronous
+        # call. Async runs and handle operations are NOT auto-tuned —
+        # async already returns quickly by design.
+        timeout = nil
+        if command && !async && !handle_id && slow_command?(command)
           timeout ||= SLOW_COMMAND_TIMEOUT
           idle_ms ||= DISABLED_IDLE_MS
         end
@@ -214,25 +291,36 @@ module Octo
         idle_ms = (idle_ms || DEFAULT_IDLE_MS).to_i
         cwd ||= working_dir
 
-        # Kill
-        if kill
-          return { error: "session_id is required when kill: true" } if session_id.nil?
-          return do_kill(session_id.to_i)
+        # Operations on an existing handle (query / send input / kill).
+        if handle_id
+          handle_id = handle_id.to_s
+          if kill
+            return do_kill_handle(handle_id)
+          elsif input.nil?
+            return do_query_handle(handle_id)
+          else
+            return do_continue_handle(handle_id, input.to_s, timeout: timeout, idle_ms: idle_ms)
+          end
         end
 
-        # Continue / poll a running session
-        if session_id
-          return { error: "input is required when session_id is given" } if input.nil?
-          return do_continue(session_id.to_i, input.to_s, timeout: timeout, idle_ms: idle_ms)
-        end
-
-        # Start a new command
+        # Start a new command.
         if command && !command.to_s.strip.empty?
+          # Runtime guard: reject async for obviously quick commands so the
+          # LLM doesn't waste tokens on an "I started it" turn for `ls`.
+          if async && quick_command?(command.to_s)
+            return {
+              error: "async:true is for long-running tasks (builds, tests, installs, dev servers). " \
+                     "This command looks quick — drop async:true and use plain sync mode.",
+              hint: "Commands like ls, cat, pwd, echo should not use async:true.",
+              command: command.to_s
+            }
+          end
           return do_start(command.to_s, cwd: cwd, env: env, timeout: timeout,
-                          idle_ms: idle_ms, background: background ? true : false)
+                          idle_ms: idle_ms, async: async ? true : false,
+                          max_duration: max_duration ? max_duration.to_i : nil)
         end
 
-        { error: "terminal: must provide either `command`, or `session_id`+`input`, or `session_id`+`kill: true`." }
+        { error: "terminal: must provide either `command`, or `handle_id` (alone to query, with input: to write, with kill:true to terminate)." }
       rescue SecurityError => e
         { error: "[Security] #{e.message}", security_blocked: true }
       rescue StandardError => e
@@ -313,7 +401,7 @@ module Octo
       # ---------------------------------------------------------------------
       # 1) Start a new command
       # ---------------------------------------------------------------------
-      private def do_start(command, cwd:, env:, timeout:, background:, idle_ms: DEFAULT_IDLE_MS)
+      private def do_start(command, cwd:, env:, timeout:, async:, max_duration: nil, idle_ms: DEFAULT_IDLE_MS)
         if cwd && !Dir.exist?(cwd.to_s)
           return { error: "cwd does not exist: #{cwd}" }
         end
@@ -325,34 +413,22 @@ module Octo
           project_root: cwd || Dir.pwd
         )
 
-        # Background / dedicated path — never reuse the persistent shell,
-        # because these commands stay running and would occupy the slot.
-        if background
-          session = spawn_dedicated_session(cwd: cwd, env: env)
-          return session if session.is_a?(Hash) && session[:error]
+        # Transparent async: if the caller didn't ask for async but the
+        # command is a known slow pattern (build/test/install), behave AS
+        # IF async:true was specified — the LLM gets a handle back, the
+        # user keeps their input free.
+        async ||= slow_command?(command)
 
-          # Dedicated sessions spawn with `--noprofile --norc` so there's
-          # nothing to hook. with_hooks is a no-op there but we keep it
-          # true for symmetry / future-proofing.
-          write_user_command(session, safe_command, with_hooks: true)
-
-          return wait_and_package(
-            session,
-            timeout: BACKGROUND_COLLECT_SECONDS,
-            idle_ms: DISABLED_IDLE_MS,
-            background: true,
-            persistent: false,
-            original_command: command,
-            rewritten_command: safe_command
-          )
+        if async
+          # Async path — spawn dedicated session, register a Registry
+          # task, start the watcher that pushes a notification on exit.
+          return start_async_command(command, safe_command, cwd: cwd, env: env, max_duration: max_duration)
         end
 
-        # Foreground path — try the persistent shell first.
+        # Foreground sync — try the persistent shell first, fall back to
+        # a one-shot dedicated session if the persistent slot is busy.
         session, _reused = acquire_persistent_session(cwd: cwd, env: env)
         persistent = !session.nil?
-
-        # Fallback: one-shot shell (old behaviour) if the persistent slot
-        # is unavailable (e.g. spawn failed previously).
         session ||= spawn_dedicated_session(cwd: cwd, env: env)
         return session if session.is_a?(Hash) && session[:error]
 
@@ -362,7 +438,7 @@ module Octo
         # write_user_command for the full rationale.
         write_user_command(session, safe_command, with_hooks: true)
 
-        wait_and_package(
+        result = wait_and_package(
           session,
           timeout: timeout,
           idle_ms: idle_ms,
@@ -370,23 +446,214 @@ module Octo
           original_command: command,
           rewritten_command: safe_command
         )
+
+        # Sync command is still alive when wait_and_package returned —
+        # either waiting on a prompt (idle) or just slow (timeout reached)
+        # or backgrounded. Promote to a handle so the LLM can address it
+        # with terminal(handle_id:, ...). No watcher — the LLM is expected
+        # to come back synchronously. If the LLM walks away without
+        # killing the handle, the process leaks; we accept that as rare.
+        if result[:session_id] && %w[waiting background timeout].include?(result[:state].to_s)
+          return promote_to_handle(session, result)
+        end
+
+        result
+      end
+
+      # Spawn a session, write the command, collect ~2s of startup output
+      # to surface crashes early, then register a Registry task + watcher.
+      # Used by every async path (explicit async:true OR slow_command?
+      # auto-routing).
+      private def start_async_command(command, safe_command, cwd:, env:, max_duration:)
+        session = spawn_dedicated_session(cwd: cwd, env: env)
+        return session if session.is_a?(Hash) && session[:error]
+
+        write_user_command(session, safe_command, with_hooks: true)
+
+        # Collect ~2s of startup output so crashes are visible right away.
+        result = wait_and_package(
+          session,
+          timeout: BACKGROUND_COLLECT_SECONDS,
+          idle_ms: DISABLED_IDLE_MS,
+          background: true,
+          persistent: false,
+          original_command: command,
+          rewritten_command: safe_command
+        )
+
+        # If it finished inside the startup window (fast command misjudged
+        # as slow, or it crashed immediately), return the sync result.
+        unless result[:session_id] && %w[background waiting].include?(result[:state].to_s)
+          return result
+        end
+
+        # Still running — register the task + watcher, return a handle.
+        handle_id = register_task_for_session(session, command: command, cwd: cwd, max_duration: max_duration, watch: true)
+
+        {
+          accepted:       true,
+          handle_id:      handle_id,
+          state:          "running",
+          output_file:    session.log_file,
+          startup_output: result[:output],
+          message:        "Async task started. You'll receive a <task-notification> when it exits. " \
+                          "To peek at live progress: Read(output_file). To kill: " \
+                          "terminal(handle_id: \"#{handle_id}\", kill: true)."
+        }
+      end
+
+      # Promote a sync-hits-idle-or-timeout session to a handle. Two paths:
+      #
+      #   :waiting  → watch:false — LLM must come back with input/kill.
+      #               No callback registered, no push notification.
+      #   :timeout  → watch:true  — command is still running, just slow.
+      #               Watcher monitors until exit, callback pushes a
+      #               <task-notification> to the agent when done.
+      #
+      # For :timeout, we add accepted:true so the agent's act() path
+      # registers a completion callback (same as explicit async:true).
+      private def promote_to_handle(session, result)
+        state_str = result[:state].to_s
+        watch = (state_str == "timeout" || state_str == "idle")
+
+        max_duration = state_str == "idle" ? IDLE_MAX_DURATION : nil
+
+        handle_id = register_task_for_session(
+          session,
+          command: result[:original_command] || result[:rewritten_command] || nil,
+          cwd: nil,
+          max_duration: max_duration,
+          watch: watch
+        )
+
+        idle_msg = "Command is waiting for input (idle). To answer: " \
+                   "terminal(handle_id: \"#{handle_id}\", input: \"y\n\"). " \
+                   "To kill: terminal(handle_id: \"#{handle_id}\", kill: true)."
+        timeout_msg = "Command exceeded sync timeout but is still running. " \
+                      "You'll be notified when it finishes. " \
+                      "To peek: Read(output_file). " \
+                      "To kill: terminal(handle_id: \"#{handle_id}\", kill: true)."
+
+        result_hash = {
+          handle_id:   handle_id,
+          state:       result[:state],
+          output:      result[:output],
+          output_file: session.log_file,
+          message:     watch ? timeout_msg : idle_msg,
+          bytes_read:  result[:bytes_read]
+        }
+        result_hash[:accepted] = true if watch
+        result_hash
+      end
+
+      # Register a Registry task for a running session. Stores the
+      # internal SessionManager id in metadata so handle ops can look up
+      # the PTY later. Watcher is optional — async paths want it (for
+      # push notifications); sync-promoted handles don't (LLM is driving
+      # synchronously). Returns the handle_id.
+      private def register_task_for_session(session, command:, cwd:, max_duration:, watch:)
+        handle_id = BackgroundTaskRegistry.create_task(
+          type: "terminal",
+          metadata: {
+            command:              command,
+            cwd:                  cwd,
+            max_duration:         max_duration || BACKGROUND_TASK_MAX_DURATION,
+            agent_session_id:     @agent_session_id,
+            internal_session_id:  session.id,
+            watched:              watch
+          },
+          on_cancel: build_session_cancel_hook(session)
+        )
+
+        if watch
+          start_background_watcher(session, handle_id, command: command,
+                                   max_duration: max_duration || BACKGROUND_TASK_MAX_DURATION)
+        end
+
+        handle_id
+      end
+
+      # Cancel hook used by Registry to kill the underlying process +
+      # close fds when a task is cancelled. Same logic for both watched
+      # (async) and unwatched (sync-promoted) handles.
+      private def build_session_cancel_hook(session)
+        ->(_task) {
+          begin
+            SessionManager.kill(session.id, signal: "TERM")
+            sleep 0.1
+            Process.kill("KILL", session.pid)
+          rescue StandardError
+            # ignore — best-effort cleanup
+          end
+          begin
+            session.writer.close
+            session.reader.close
+            session.log_io.close
+          rescue StandardError
+            # ignore
+          end
+          SessionManager.forget(session.id)
+        }
+      end
+
+      # Look up the PTY session backing a handle_id (UUID). Returns nil
+      # if the handle is unknown, already completed, or the session was
+      # forgotten by SessionManager.
+      private def session_for_handle(handle_id)
+        task = BackgroundTaskRegistry.get(handle_id)
+        return nil unless task
+        return nil unless task[:status] == "running"
+
+        internal_id = task[:metadata]&.[](:internal_session_id)
+        return nil unless internal_id
+
+        SessionManager.refresh(internal_id)
       end
 
       # ---------------------------------------------------------------------
-      # 2) Continue / poll an existing session
+      # 2) Continue a handle: send input + poll for new output
       # ---------------------------------------------------------------------
-      private def do_continue(session_id, input, timeout:, idle_ms: DEFAULT_IDLE_MS)
-        session = SessionManager.refresh(session_id)
-        return { error: "Session ##{session_id} not found (already finished or killed)." } unless session
+      private def do_continue_handle(handle_id, input, timeout:, idle_ms: DEFAULT_IDLE_MS)
+        session = session_for_handle(handle_id)
+        return { error: "Handle #{handle_id} not found (already finished or killed)." } unless session
+
+        # Bump last-activity so the sweep thread doesn't cancel an
+        # unwatched handle that the LLM is actively driving.
+        BackgroundTaskRegistry.record_activity(handle_id)
 
         if %w[exited killed].include?(session.status)
+          # Mark Registry task complete (if not already) and clean up.
+          BackgroundTaskRegistry.complete(handle_id, { exit_code: session.exit_code,
+                                                       output: "",
+                                                       state: "exited" })
           cleanup_session(session)
-          return { error: "Session ##{session_id} has already #{session.status}." }
+          return { handle_id: handle_id, state: "exited", exit_code: session.exit_code,
+                   error: "Handle #{handle_id} has already #{session.status}." }
         end
 
         session.mutex.synchronize { session.writer.write(normalize_input_for_pty(input.to_s)) } unless input.to_s.empty?
 
-        wait_and_package(session, timeout: timeout, idle_ms: idle_ms)
+        result = wait_and_package(session, timeout: timeout, idle_ms: idle_ms)
+
+        # If the command finished as part of this sync poll, mark the Registry
+        # task complete so any registered callback knows. For "watched"
+        # handles (async path) the watcher would catch this anyway and we'd
+        # race; complete() is idempotent (registry checks status before
+        # firing) so it's safe.
+        if result[:exit_code]
+          BackgroundTaskRegistry.complete(handle_id, {
+            exit_code: result[:exit_code],
+            output:    result[:output],
+            state:     "exited"
+          })
+        end
+
+        # Rename session_id → handle_id in the result if wait_and_package
+        # set it (it uses the internal int id by default). Once the command
+        # has exited (exit_code is set), drop handle_id — the handle is gone.
+        result.delete(:session_id)
+        result[:handle_id] = handle_id unless result[:exit_code]
+        result
       end
 
       # `\n` is a Unix newline, not the "Enter key". Inside cooked-mode PTYs
@@ -404,18 +671,66 @@ module Octo
       end
 
       # ---------------------------------------------------------------------
-      # 3) Kill a session
+      # 3) Kill a handle — cancel the Registry task (which fires the
+      #    on_cancel hook to TERM/KILL the underlying process and close fds).
       # ---------------------------------------------------------------------
-      private def do_kill(session_id)
-        session = SessionManager.get(session_id)
-        return { error: "Session ##{session_id} not found" } unless session
+      private def do_kill_handle(handle_id)
+        cancelled = BackgroundTaskRegistry.cancel(handle_id)
+        if cancelled
+          { killed: true, handle_id: handle_id, message: "Handle #{handle_id} cancelled." }
+        else
+          { error: "Handle #{handle_id} not found or already completed." }
+        end
+      end
 
-        SessionManager.kill(session.id, signal: "TERM")
-        sleep 0.1
-        Process.kill("KILL", session.pid) rescue nil
-        cleanup_session(session)
+      # ---------------------------------------------------------------------
+      # 4) Query a handle — current state without sending input or waiting.
+      # ---------------------------------------------------------------------
+      private def do_query_handle(handle_id)
+        task = BackgroundTaskRegistry.get(handle_id)
+        return { error: "Handle #{handle_id} not found." } unless task
 
-        { killed: true, session_id: session_id, message: "Session ##{session_id} killed." }
+        # Bump last-activity so the sweep thread knows this handle is
+        # still being driven by the LLM and doesn't cancel it.
+        BackgroundTaskRegistry.record_activity(handle_id)
+
+        elapsed = task[:created_at] ? (Time.now - task[:created_at]).round : nil
+        session = session_for_handle(handle_id)
+        {
+          handle_id:       handle_id,
+          state:           task[:status],
+          command:         task[:metadata]&.[](:command),
+          started_at:      task[:created_at]&.iso8601,
+          elapsed_seconds: elapsed,
+          output_file:     session&.log_file,
+          exit_code:       task.dig(:result, :exit_code),
+          message:         status_message_for_handle(task, elapsed)
+        }.compact
+      end
+
+      private def status_message_for_handle(task, elapsed)
+        status = task[:status]
+        cmd = task[:metadata]&.[](:command) || "unknown command"
+        time_str = elapsed ? "(running for #{elapsed}s)" : ""
+
+        case status
+        when "running"
+          "Handle is still running #{time_str}: #{cmd}. You will be notified when it completes."
+        when "completed"
+          result = task[:result] || {}
+          exit_code = result[:exit_code]
+          if exit_code.nil?
+            "Handle completed with unknown status: #{cmd}."
+          elsif exit_code.zero?
+            "Handle completed successfully: #{cmd}."
+          else
+            "Handle failed with exit code #{exit_code}: #{cmd}."
+          end
+        when "cancelled"
+          "Handle was cancelled: #{cmd}."
+        else
+          "Handle status: #{status} #{time_str}: #{cmd}."
+        end
       end
 
       # =====================================================================
@@ -516,13 +831,16 @@ module Octo
           PersistentSessionPool.instance.discard if persistent
           {
             output: cleaned,
+            # NB: session_id here is the INTERNAL SessionManager int id, not
+            # exposed to the LLM. Caller paths (do_start / do_continue_handle /
+            # start_async_command) translate it into a handle_id (UUID) via
+            # the Registry before returning to the LLM.
             session_id: session.id,
             state: background ? "background" : (state == :idle ? "waiting" : "timeout"),
             bytes_read: new_offset - start_offset,
             output_truncated: truncated,
             full_output_file: overflow_file,
-            security_rewrite: rewrite_note,
-            hint: background_hint(background, session.id)
+            security_rewrite: rewrite_note
           }.compact
         end
       end
@@ -546,7 +864,7 @@ module Octo
       end
 
       # The shell may echo the wrapper line we injected (`{ USER_CMD; }; ...;
-      # printf "__OCTO_DONE_..."`) before running it. When stty -echo is
+      # printf "__CLACKY_DONE_..."`) before running it. When stty -echo is
       # honoured (bash/fresh pty) this is a no-op; when it isn't (zsh ZLE
       # sometimes re-enables echo on reuse, or the user sent input to a
       # running session) we strip the wrapper echo wherever it appears.
@@ -557,12 +875,12 @@ module Octo
       #      \n escapes inside printf's double-quoted format string):
       #        { USER_CMD
       #        }; __octo_ec=$?; printf "
-      #        __OCTO_DONE_<token>_%s__
+      #        __CLACKY_DONE_<token>_%s__
       #        " "$__octo_ec"
       #
       #   2) Single-line / partially-truncated (PTY width wrap or partial
       #      char drop ate the leading `{` or first chars of the command):
-      #        ails runner foo.rb ... }; __octo_ec=$?; printf " __OCTO_DONE_<token>_%s__ " "$__octo_ec"
+      #        ails runner foo.rb ... }; __octo_ec=$?; printf " __CLACKY_DONE_<token>_%s__ " "$__octo_ec"
       #
       #   3) Embedded mid-stream when re-echoed (e.g. after session re-use
       #      or after a user input: call landed in a shell that re-enabled
@@ -575,7 +893,7 @@ module Octo
       #     wrapper fragment anywhere in the buffer. The token makes this
       #     safe: the real completion marker was already removed via
       #     session.marker_regex above, so any surviving occurrence of
-      #     __OCTO_DONE_<token>_ is by definition an echoed wrapper.
+      #     __CLACKY_DONE_<token>_ is by definition an echoed wrapper.
       private def strip_command_echo(text, marker_token: nil)
         return text if text.nil? || text.empty?
 
@@ -600,11 +918,11 @@ module Octo
         if marker_token && !marker_token.empty?
           token_re = Regexp.escape(marker_token)
 
-          # 2a. Multi-line shape: walk back from __OCTO_DONE_<token> to
+          # 2a. Multi-line shape: walk back from __CLACKY_DONE_<token> to
           # the opening `{` of the wrapper (start of line or start of
           # buffer) and forward to the closing `"$__octo_ec"`.
           text = text.gsub(
-            /(?:^|(?<=\n))\{[^\n]*\n(?:[^\n]*\n)*?[^\n]*__OCTO_DONE_#{token_re}_[^\n]*\n[^\n]*"\$__octo_ec"[^\n]*\n?/,
+            /(?:^|(?<=\n))\{[^\n]*\n(?:[^\n]*\n)*?[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*\n[^\n]*"\$__octo_ec"[^\n]*\n?/,
             ""
           )
 
@@ -613,21 +931,21 @@ module Octo
           # opening `{` if still present on that line) through the end of
           # the printf invocation (`"$__octo_ec"`).
           text = text.gsub(
-            /[^\n]*\}; *__octo_ec=\$\?; *printf[^\n]*__OCTO_DONE_#{token_re}_[^\n]*"\$__octo_ec"[^\n]*\n?/,
+            /[^\n]*\}; *__octo_ec=\$\?; *printf[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*"\$__octo_ec"[^\n]*\n?/,
             ""
           )
 
           # 2c. Last-resort: a bare marker-format fragment on its own,
           # without the `}; printf ...` prefix (e.g. terminal wrapped the
           # echo such that only the tail survived). Drop lines that
-          # contain the literal `__OCTO_DONE_<token>_%s__` format —
+          # contain the literal `__CLACKY_DONE_<token>_%s__` format —
           # the real marker has `\d+` in place of `%s` so this only hits
           # echoed wrappers.
-          text = text.gsub(/^.*__OCTO_DONE_#{token_re}_%s__.*\n?/, "")
+          text = text.gsub(/^.*__CLACKY_DONE_#{token_re}_%s__.*\n?/, "")
         end
 
         # Pass 3: token-INDEPENDENT fingerprint strip — PTY width-wrap
-        # can chop the `__OCTO_DONE_<token>_%s__` format string out of
+        # can chop the `__CLACKY_DONE_<token>_%s__` format string out of
         # printf entirely, leaving e.g. `}; __octo_ec=$?; printf " " "$__octo_ec"`.
         # None of the token-aware patterns above catch that. The pair
         # `}; __octo_ec=$?` (opening pivot) and `"$__octo_ec"` (printf
@@ -652,18 +970,10 @@ module Octo
         text
       end
 
-      private def background_hint(background, session_id)
-        if background
-          "Running as background session ##{session_id}. Poll with " \
-            "{session_id: #{session_id}, input: \"\"} or stop with " \
-            "{session_id: #{session_id}, kill: true}."
-        else
-          "Command is still running. If it's waiting for input, reply with " \
-            "{session_id: #{session_id}, input: \"...\"}. To just check " \
-            "progress: {session_id: #{session_id}, input: \"\"}. To stop: " \
-            "{session_id: #{session_id}, kill: true}."
-        end
-      end
+      # NOTE: background_hint helper removed — the unified handle-based API
+      # composes per-context messages in do_start / promote_to_handle /
+      # start_async_command directly, all using the handle_id (UUID) the
+      # LLM should reference.
 
       private def rewrite_note(original, rewritten)
         return nil if original.nil? || rewritten.nil?
@@ -683,6 +993,86 @@ module Octo
         session.reader.close rescue nil
         session.log_io.close rescue nil
         SessionManager.forget(session.id)
+      end
+
+      # -----------------------------------------------------------------
+      # Background task watcher (fire_and_forget mode)
+      # -----------------------------------------------------------------
+
+      # Spawn a watcher thread that waits for the background session to
+      # finish, then packages the result and notifies the registry.
+      # The session is cleaned up after completion (success or crash).
+      private def start_background_watcher(session, handle_id, command: nil, max_duration: BACKGROUND_TASK_MAX_DURATION)
+        Thread.new do
+          Thread.current.name = "bg-terminal-#{handle_id[0, 8]}"
+          begin
+            start_offset = session.read_offset
+
+            _before, code, state = read_until_marker(
+              session,
+              timeout: max_duration,
+              idle_ms: DISABLED_IDLE_MS
+            )
+
+            result = package_background_result(session, start_offset, code, state)
+            result[:handle_id]   = handle_id
+            result[:command]     = command
+            result[:output_file] = session.log_file
+            BackgroundTaskRegistry.complete(handle_id, result)
+          rescue => e
+            BackgroundTaskRegistry.complete(handle_id, {
+              error: "Background watcher failed: #{e.class}: #{e.message}",
+              exit_code: nil,
+              handle_id: handle_id,
+              command: command,
+              output_file: session.log_file
+            })
+          ensure
+            cleanup_session(session)
+          end
+        end
+      end
+
+      # Package the final result of a background session for the registry.
+      # Mirrors wait_and_package but without session pooling logic.
+      private def package_background_result(session, start_offset, code, state)
+        new_offset = log_size(session)
+        raw = read_log_slice(session.log_file, start_offset, new_offset)
+        cleaned = OutputCleaner.clean(raw)
+        cleaned = cleaned.sub(session.marker_regex, "").rstrip if session.marker_regex
+        cleaned = strip_command_echo(cleaned, marker_token: session.marker_token)
+        cleaned = truncate_long_lines(cleaned)
+
+        exit_code = nil
+        if state == :matched || state == :eof
+          exit_code = code || session.exit_code
+        end
+
+        # Spill if oversized
+        overflow_file = nil
+        if cleaned.bytesize > MAX_LLM_OUTPUT_CHARS
+          overflow_file = spill_overflow_file(cleaned, session_id: session.id)
+          preview = cleaned.byteslice(0, OVERFLOW_PREVIEW_CHARS)
+          preview.force_encoding(Encoding::UTF_8)
+          preview = preview.scrub("?") unless preview.valid_encoding?
+          notice = if overflow_file
+            "\n\n...[Output truncated for LLM: showing first #{OVERFLOW_PREVIEW_CHARS} " \
+              "of #{cleaned.bytesize} chars. Full output saved to: #{overflow_file}]"
+          else
+            "\n\n...[output truncated at #{OVERFLOW_PREVIEW_CHARS} chars]"
+          end
+          cleaned = preview + notice
+        end
+
+        result = {
+          output: cleaned,
+          exit_code: exit_code,
+          state: state.to_s,
+          bytes_read: new_offset - start_offset
+        }
+        result[:full_output_file] = overflow_file if overflow_file
+        result[:error] = "Process exited without exit code" if state == :eof && exit_code.nil?
+        result
       end
 
       private def chdir_args(cwd)
@@ -769,10 +1159,15 @@ module Octo
         spawn_env = {
           "TERM" => "xterm-256color",
           "PS1"  => "",
+          # AI agents never need interactive pagers — less/more would
+          # block the PTY waiting for input, causing idle promotion and
+          # wasted timeout waiting. Force everything to dump to stdout.
+          "PAGER"     => "cat",
+          "GIT_PAGER" => "cat",
           # Prevent our sub-shell from polluting the user's ~/.zsh_history
           # (or ~/.bash_history). We fork a full interactive login shell to
           # get rbenv/nvm/brew-shellenv/mise loaded, but every command we
-          # feed it (including our `{ cmd; }; printf "__OCTO_DONE_..."`
+          # feed it (including our `{ cmd; }; printf "__CLACKY_DONE_..."`
           # wrappers) would otherwise land in the user's shared HISTFILE
           # on exit.
           #
@@ -790,11 +1185,11 @@ module Octo
         log_io   = File.open(log_file, "wb")
 
         # Prevent the child process from inheriting the server's
-        # listening socket (port 8888) which would block hot_restart.
+        # listening socket (port 7070) which would block hot_restart.
         # PTY.spawn does not support close_others, so we temporarily
         # set close_on_exec on the inherited fd — the kernel closes
         # it in the child after exec while the parent keeps it open.
-        inherited_fd = ENV["OCTO_INHERIT_FD"].to_i
+        inherited_fd = ENV["CLACKY_INHERIT_FD"].to_i
         if inherited_fd > 0
           begin
             inherited_io = IO.for_fd(inherited_fd)
@@ -904,7 +1299,7 @@ module Octo
         #   2. stty -echo stops the PTY from echoing our wrapper lines
         #      back into captured output.
         #   3. Empty PS1/PS2 keeps prompt noise out of captured output.
-        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; set +o histexpand 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""\n}
+        setup_line = %Q{HISTFILE=/dev/null; HISTSIZE=0; SAVEHIST=0; unset HISTFILE 2>/dev/null; set +o histexpand 2>/dev/null; stty -echo 2>/dev/null; PS1=""; PS2=""; export PAGER=cat; export GIT_PAGER=cat\n}
         session.mutex.synchronize { session.writer.write(setup_line) }
 
         # Install the safe-rm shell function. Single-line `source`
@@ -960,7 +1355,7 @@ module Octo
         # exit codes are also swallowed so the *user* command's $? is what
         # lands in `__octo_ec`.
         hooks_line = with_hooks ? hooks_prefix_for(session) : ""
-        line   = %Q|#{hooks_line}{ #{command}\n}; __octo_ec=$?; printf "\n__OCTO_DONE_#{token}_%s__\n" "$__octo_ec"\n|
+        line   = %Q|#{hooks_line}{ #{command}\n}; __octo_ec=$?; printf "\n__CLACKY_DONE_#{token}_%s__\n" "$__octo_ec"\n|
         session.mutex.synchronize { session.writer.write(line) }
       end
 
@@ -1171,12 +1566,25 @@ module Octo
         s = s.sub(/\Acd\s+\S+\s*(?:&&|;)\s*/, "")
         # Strip leading env-var assignments: `FOO=bar BAZ=qux cmd`.
         s = s.sub(/\A(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "")
-        # Strip leading `sudo ` (not actually allowed by Security, but harmless).
-        s = s.sub(/\Asudo\s+/, "")
         # Trim leading whitespace.
         s = s.lstrip
 
         SLOW_COMMAND_PATTERNS.any? { |pat| s.include?(pat) }
+      end
+
+      # Check if a command is obviously quick and should never use
+      # fire_and_forget. Used as a runtime guard to prevent token waste.
+      private def quick_command?(command)
+        return false if command.nil? || command.empty?
+        s = command.to_s
+
+        # Strip leading `cd ... && ` / `cd ...;` — the real command follows.
+        s = s.sub(/\A\s*cd\s+\S+\s*(?:&&|;)\s*/, "")
+        # Strip leading env-var assignments.
+        s = s.sub(/\A(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)+/, "")
+        s = s.lstrip
+
+        QUICK_COMMAND_PATTERNS.any? { |pat| s.match?(pat) }
       end
 
       # Apply per-line truncation to a cleaned (post-OutputCleaner) string.
@@ -1263,25 +1671,31 @@ module Octo
       DISPLAY_COMMAND_MAX_CHARS = 80
 
       def format_call(args)
-        cmd  = args[:command] || args["command"]
-        sid  = args[:session_id] || args["session_id"]
-        inp  = args[:input] || args["input"]
-        kill = args[:kill] || args["kill"]
-        bg   = args[:background] || args["background"]
+        cmd    = args[:command]   || args["command"]
+        handle = args[:handle_id] || args["handle_id"]
+        inp    = args[:input]     || args["input"]
+        kill   = args[:kill]      || args["kill"]
+        async  = args[:async]     || args["async"]
 
-        if kill && sid
-          "terminal(stop)"
-        elsif sid
+        if handle && kill
+          "terminal(cancel handle)"
+        elsif handle && !inp.nil?
           if inp.to_s.empty?
-            "terminal(check output)"
+            "terminal(check handle)"
           else
             preview = inp.to_s.strip
             preview = preview.length > 30 ? "#{preview[0, 30]}..." : preview
             "terminal(send #{preview.inspect})"
           end
+        elsif handle
+          "terminal(query handle)"
         elsif cmd
           display_cmd = compact_command_for_display(cmd)
-          bg ? "terminal(#{display_cmd}, background)" : "terminal(#{display_cmd})"
+          if async
+            "terminal(#{display_cmd}, async)"
+          else
+            "terminal(#{display_cmd})"
+          end
         else
           "terminal(?)"
         end
@@ -1310,11 +1724,16 @@ module Octo
 
         return "done" unless result.is_a?(Hash)
 
+        # Async task accepted — harness will notify on completion.
+        if result[:accepted]
+          return "async task started"
+        end
+
         prefix = result[:security_rewrite] ? "[Safe] " : ""
         tail   = display_tail(result[:output])
 
         status =
-          if result[:session_id]
+          if result[:handle_id]
             # still running / waiting for input
             state = result[:state] || "waiting"
             "… #{state}"

@@ -328,6 +328,28 @@ module Octo
         forward_to_subscribers { |sub| sub.update_todos(todos) }
       end
 
+      def update_background_tasks(running: 0, tasks: [])
+        safe_tasks = Array(tasks).map do |t|
+          cmd = (t[:command] || t["command"]).to_s
+          cmd = "#{cmd[0, 80]}…" if cmd.length > 80
+          {
+            handle_id: (t[:handle_id] || t["handle_id"]).to_s,
+            command: cmd,
+            elapsed: (t[:elapsed] || t["elapsed"]).to_i
+          }
+        end
+        emit("background_tasks_update", running: running.to_i, tasks: safe_tasks)
+      end
+
+      def show_background_task_notice(command: nil, handle_id: nil, status: "success")
+        cmd = command.to_s
+        cmd = "#{cmd[0, 60]}…" if cmd.length > 60
+        emit("background_task_notice",
+             command: cmd,
+             handle_id: handle_id.to_s,
+             status: status.to_s)
+      end
+
       def set_working_status
         emit("session_update", status: "working")
         forward_to_subscribers { |sub| sub.set_working_status }
