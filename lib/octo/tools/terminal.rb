@@ -864,7 +864,7 @@ module Octo
       end
 
       # The shell may echo the wrapper line we injected (`{ USER_CMD; }; ...;
-      # printf "__CLACKY_DONE_..."`) before running it. When stty -echo is
+      # printf "__OCTO_DONE_..."`) before running it. When stty -echo is
       # honoured (bash/fresh pty) this is a no-op; when it isn't (zsh ZLE
       # sometimes re-enables echo on reuse, or the user sent input to a
       # running session) we strip the wrapper echo wherever it appears.
@@ -875,12 +875,12 @@ module Octo
       #      \n escapes inside printf's double-quoted format string):
       #        { USER_CMD
       #        }; __octo_ec=$?; printf "
-      #        __CLACKY_DONE_<token>_%s__
+      #        __OCTO_DONE_<token>_%s__
       #        " "$__octo_ec"
       #
       #   2) Single-line / partially-truncated (PTY width wrap or partial
       #      char drop ate the leading `{` or first chars of the command):
-      #        ails runner foo.rb ... }; __octo_ec=$?; printf " __CLACKY_DONE_<token>_%s__ " "$__octo_ec"
+      #        ails runner foo.rb ... }; __octo_ec=$?; printf " __OCTO_DONE_<token>_%s__ " "$__octo_ec"
       #
       #   3) Embedded mid-stream when re-echoed (e.g. after session re-use
       #      or after a user input: call landed in a shell that re-enabled
@@ -893,7 +893,7 @@ module Octo
       #     wrapper fragment anywhere in the buffer. The token makes this
       #     safe: the real completion marker was already removed via
       #     session.marker_regex above, so any surviving occurrence of
-      #     __CLACKY_DONE_<token>_ is by definition an echoed wrapper.
+      #     __OCTO_DONE_<token>_ is by definition an echoed wrapper.
       private def strip_command_echo(text, marker_token: nil)
         return text if text.nil? || text.empty?
 
@@ -918,11 +918,11 @@ module Octo
         if marker_token && !marker_token.empty?
           token_re = Regexp.escape(marker_token)
 
-          # 2a. Multi-line shape: walk back from __CLACKY_DONE_<token> to
+          # 2a. Multi-line shape: walk back from __OCTO_DONE_<token> to
           # the opening `{` of the wrapper (start of line or start of
           # buffer) and forward to the closing `"$__octo_ec"`.
           text = text.gsub(
-            /(?:^|(?<=\n))\{[^\n]*\n(?:[^\n]*\n)*?[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*\n[^\n]*"\$__octo_ec"[^\n]*\n?/,
+            /(?:^|(?<=\n))\{[^\n]*\n(?:[^\n]*\n)*?[^\n]*__OCTO_DONE_#{token_re}_[^\n]*\n[^\n]*"\$__octo_ec"[^\n]*\n?/,
             ""
           )
 
@@ -931,21 +931,21 @@ module Octo
           # opening `{` if still present on that line) through the end of
           # the printf invocation (`"$__octo_ec"`).
           text = text.gsub(
-            /[^\n]*\}; *__octo_ec=\$\?; *printf[^\n]*__CLACKY_DONE_#{token_re}_[^\n]*"\$__octo_ec"[^\n]*\n?/,
+            /[^\n]*\}; *__octo_ec=\$\?; *printf[^\n]*__OCTO_DONE_#{token_re}_[^\n]*"\$__octo_ec"[^\n]*\n?/,
             ""
           )
 
           # 2c. Last-resort: a bare marker-format fragment on its own,
           # without the `}; printf ...` prefix (e.g. terminal wrapped the
           # echo such that only the tail survived). Drop lines that
-          # contain the literal `__CLACKY_DONE_<token>_%s__` format —
+          # contain the literal `__OCTO_DONE_<token>_%s__` format —
           # the real marker has `\d+` in place of `%s` so this only hits
           # echoed wrappers.
-          text = text.gsub(/^.*__CLACKY_DONE_#{token_re}_%s__.*\n?/, "")
+          text = text.gsub(/^.*__OCTO_DONE_#{token_re}_%s__.*\n?/, "")
         end
 
         # Pass 3: token-INDEPENDENT fingerprint strip — PTY width-wrap
-        # can chop the `__CLACKY_DONE_<token>_%s__` format string out of
+        # can chop the `__OCTO_DONE_<token>_%s__` format string out of
         # printf entirely, leaving e.g. `}; __octo_ec=$?; printf " " "$__octo_ec"`.
         # None of the token-aware patterns above catch that. The pair
         # `}; __octo_ec=$?` (opening pivot) and `"$__octo_ec"` (printf
@@ -1167,7 +1167,7 @@ module Octo
           # Prevent our sub-shell from polluting the user's ~/.zsh_history
           # (or ~/.bash_history). We fork a full interactive login shell to
           # get rbenv/nvm/brew-shellenv/mise loaded, but every command we
-          # feed it (including our `{ cmd; }; printf "__CLACKY_DONE_..."`
+          # feed it (including our `{ cmd; }; printf "__OCTO_DONE_..."`
           # wrappers) would otherwise land in the user's shared HISTFILE
           # on exit.
           #
@@ -1189,7 +1189,7 @@ module Octo
         # PTY.spawn does not support close_others, so we temporarily
         # set close_on_exec on the inherited fd — the kernel closes
         # it in the child after exec while the parent keeps it open.
-        inherited_fd = ENV["CLACKY_INHERIT_FD"].to_i
+        inherited_fd = ENV["OCTO_INHERIT_FD"].to_i
         if inherited_fd > 0
           begin
             inherited_io = IO.for_fd(inherited_fd)
@@ -1355,7 +1355,7 @@ module Octo
         # exit codes are also swallowed so the *user* command's $? is what
         # lands in `__octo_ec`.
         hooks_line = with_hooks ? hooks_prefix_for(session) : ""
-        line   = %Q|#{hooks_line}{ #{command}\n}; __octo_ec=$?; printf "\n__CLACKY_DONE_#{token}_%s__\n" "$__octo_ec"\n|
+        line   = %Q|#{hooks_line}{ #{command}\n}; __octo_ec=$?; printf "\n__OCTO_DONE_#{token}_%s__\n" "$__octo_ec"\n|
         session.mutex.synchronize { session.writer.write(line) }
       end
 
