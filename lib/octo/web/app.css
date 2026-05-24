@@ -1991,7 +1991,6 @@ body {
 .tu-sep   { color: var(--color-text-muted); opacity: 0.45; padding: 0 1px; }
 .tu-cache { color: var(--color-accent-primary); font-weight: 600; }   /* [*] */
 .tu-field { color: var(--color-text-muted); }
-.tu-cost  { color: var(--color-text-tertiary); }
 .tu-delta       { font-weight: 700; }
 .tu-delta-ok    { color: #34d399; }   /* green — normal */
 .tu-delta-mid   { color: #f59e0b; }   /* yellow — moderate */
@@ -2360,7 +2359,6 @@ body {
 #sib-mode  { opacity: 0.45; flex-shrink: 0; }   /* tier 3 */
 #sib-model { opacity: 1;    flex-shrink: 0; }   /* tier 1 — the model is primary */
 #sib-tasks { opacity: 0.75; flex-shrink: 0; }   /* tier 2 */
-#sib-cost  { opacity: 0.45; flex-shrink: 0; }   /* tier 3 */
 
 /* ── Latency signal (right after model name) ──────────────────────────────
    A compact 4-bar signal + TTFT value. Placed adjacent to #sib-model so the

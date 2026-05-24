@@ -97,8 +97,8 @@ module Octo
       puts_line("[shell] #{command}")
     end
 
-    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
-      parts = ["[done] iterations=#{iterations}", "cost=$#{cost.round(4)}"]
+    def show_complete(iterations:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
+      parts = ["[done] iterations=#{iterations}"]
       parts << "duration=#{duration.round(1)}s" if duration
       puts_line(parts.join(" "))
     end
@@ -136,7 +136,7 @@ module Octo
 
     # === State updates (no-ops) ===
 
-    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil); end
+    def update_sessionbar(tasks: nil, status: nil, latency: nil); end
     def update_todos(todos); end
     def set_working_status; end
     def set_idle_status; end

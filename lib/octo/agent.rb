@@ -13,7 +13,6 @@ require_relative "utils/environment_detector"
 require_relative "agent/message_compressor"
 require_relative "agent/message_compressor_helper"
 require_relative "agent/tool_executor"
-require_relative "agent/cost_tracker"
 require_relative "agent/session_serializer"
 require_relative "agent/skill_manager"
 require_relative "agent/system_prompt_builder"
@@ -31,7 +30,6 @@ module Octo
     # Include all functionality modules
     include MessageCompressorHelper
     include ToolExecutor
-    include CostTracker
     include SessionSerializer
     include SkillManager
     include SystemPromptBuilder
@@ -43,8 +41,8 @@ module Octo
     include SkillReflector
     include SkillAutoCreator
 
-    attr_reader :session_id, :name, :history, :iterations, :total_cost, :working_dir, :created_at, :total_tasks, :todos,
-                :cache_stats, :cost_source, :ui, :skill_loader, :agent_profile,
+    attr_reader :session_id, :name, :history, :iterations, :working_dir, :created_at, :total_tasks, :todos,
+                :cache_stats, :ui, :skill_loader, :agent_profile,
                 :status, :error, :updated_at, :source,
                 :latest_latency,  # Hash of latency metrics from the most recent LLM call (see Client#send_messages_with_tools)
                 :reasoning_effort
@@ -83,7 +81,6 @@ module Octo
       @history = MessageHistory.new
       @todos = []  # Store todos in memory
       @iterations = 0
-      @total_cost = 0.0
       @cache_stats = {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
@@ -95,8 +92,6 @@ module Octo
       @working_dir = working_dir || Dir.pwd
       @created_at = Time.now.iso8601
       @total_tasks = 0
-      @cost_source = :estimated  # Track whether cost is from API or estimated
-      @task_cost_source = :estimated  # Track cost source for current task
       @previous_total_tokens = 0  # Track tokens from previous iteration for delta calculation
       @latest_latency = nil  # Most recent LLM call's latency metrics (see Client#send_messages_with_tools)
       @reasoning_effort = nil  # Per-session reasoning effort override; nil = provider default
@@ -287,11 +282,9 @@ module Octo
       @task_truncation_count = 0  # Reset truncation counter for each task
       @task_timeout_hint_injected = false  # Reset read-timeout hint injection (see LlmCaller)
       @task_upstream_truncation_hint_injected = false  # Reset upstream-truncation hint injection (see LlmCaller)
-      @task_cost_source = :estimated  # Reset for new task
       # Note: Do NOT reset @previous_total_tokens here - it should maintain the value from the last iteration
       # across tasks to correctly calculate delta tokens in each iteration
       @task_start_iterations = @iterations  # Track starting iterations for this task
-      @task_start_cost = @total_cost  # Track starting cost for this task
       # Track cache stats for current task
       @task_cache_stats = {
         cache_creation_input_tokens: 0,
@@ -372,6 +365,7 @@ module Octo
 
           # Think: LLM reasoning with tool support
           response = think
+          @last_token_usage = response[:token_usage] if response && response[:token_usage]
 
           # Debug: check for potential infinite loops
           if @config.verbose
@@ -437,9 +431,6 @@ module Octo
               emit_assistant_message(response[:content], reasoning_content: response[:reasoning_content])
             end
 
-            # Show token usage after the assistant message so WebUI renders it below the bubble
-            @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
-
             # Debug: log why we're stopping
             if @config.verbose && (response[:tool_calls].nil? || response[:tool_calls].empty?)
               reason = response[:finish_reason] == "stop" ? "API returned finish_reason=stop" : "No tool calls in response"
@@ -469,10 +460,6 @@ module Octo
           if response[:content] && !response[:content].empty?
             emit_assistant_message(response[:content], reasoning_content: response[:reasoning_content])
           end
-
-          # Show token usage after assistant message (or immediately if no message).
-          # This ensures WebUI renders the token line below the assistant bubble.
-          @ui&.show_token_usage(response[:token_usage]) if response[:token_usage]
 
           # Act: Execute tool calls
           action_result = act(response[:tool_calls])
@@ -545,12 +532,12 @@ module Octo
         else
           @ui&.show_complete(
             iterations: result[:iterations],
-            cost: result[:total_cost_usd],
-            cost_source: result[:cost_source],
             duration: result[:duration_seconds],
             cache_stats: result[:cache_stats],
             awaiting_user_feedback: awaiting_user_feedback
           )
+          # Show token usage once at task completion (not on every iteration)
+          @ui&.show_token_usage(@last_token_usage) if @last_token_usage
         end
 
         # Fire async ghost-text prediction for the user's next message. Must
@@ -1514,15 +1501,12 @@ module Octo
 
     private def build_result(status = :success, error: nil)
       task_iterations = @iterations - (@task_start_iterations || 0)
-      task_cost = @total_cost - (@task_start_cost || 0)
 
       {
         status: status,
         session_id: @session_id,
         iterations: task_iterations,
         duration_seconds: Time.now - @start_time,
-        total_cost_usd: task_cost.round(4),
-        cost_source: @task_cost_source,
         cache_stats: @task_cache_stats || @cache_stats,
         history: @history,
         error: error
@@ -1727,7 +1711,7 @@ module Octo
       # Build summary (this will replace the subagent instructions message)
       parts = []
       parts << "[SUBAGENT SUMMARY]"
-      parts << "Completed in #{subagent.iterations} iterations, cost: $#{subagent.total_cost.round(4)}"
+      parts << "Completed in #{subagent.iterations} iterations"
       parts << "Tools used: #{tool_calls.join(', ')}" if tool_calls.any?
       parts << ""
       parts << "Results:"

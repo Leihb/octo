@@ -111,14 +111,9 @@ module Octo
         # Suppress
       end
 
-      def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
+      def show_complete(iterations:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
         flush_buffer
         parts = ["Done", "#{iterations} step#{"s" if iterations != 1}"]
-        # Only show cost when pricing source is known (model matched pricing table).
-        # Unknown models return nil — skip to avoid misleading numbers.
-        if cost && cost > 0 && cost_source
-          parts << "$#{cost.round(4)}"
-        end
         parts << "#{duration.round(1)}s" if duration
         send_text(parts.join(" · "))
         flush_adapter_pending
@@ -160,7 +155,7 @@ module Octo
 
       # === State updates (no-ops for IM) ===
 
-      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil); end
+      def update_sessionbar(tasks: nil, status: nil, latency: nil); end
       def update_todos(todos); end
       def set_working_status; end
       def set_idle_status; end

@@ -45,15 +45,6 @@ module Octo
         subagent = fork_subagent
         result = subagent.run(build_skill_reflection_prompt(skill_name))
 
-        # Merge subagent cost into parent's cumulative session spend so the
-        # sessionbar reflects the real total. Without this, reflection cost
-        # silently disappears from the user's visible total.
-        if result
-          subagent_cost = result[:total_cost_usd] || 0.0
-          @total_cost += subagent_cost
-          @ui&.update_sessionbar(cost: @total_cost, cost_source: @cost_source)
-        end
-
         # Clear the context so we don't reflect again
         @skill_execution_context = nil
       end

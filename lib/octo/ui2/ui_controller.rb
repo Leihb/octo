@@ -48,7 +48,6 @@ module Octo
         @interrupt_callback = nil
         @time_machine_callback = nil
         @tasks_count = 0
-        @total_cost = 0.0
         @session_id = nil
         @last_diff_lines = nil
 
@@ -78,8 +77,7 @@ module Octo
           working_dir: @config[:working_dir],
           mode: @config[:mode],
           model: @config[:model],
-          tasks: @tasks_count,
-          cost: @total_cost
+          tasks: @tasks_count
         )
 
         @layout.initialize_screen
@@ -107,14 +105,11 @@ module Octo
 
       # Update session bar with current stats
       # @param tasks [Integer] Number of completed tasks (optional)
-      # @param cost [Float] Total cost (optional)
-      # @param cost_source [Symbol, nil] :api / :price / :default (optional)
       # @param status [String] Workspace status ('idle' or 'working') (optional)
       # @param latency [Hash, nil] Latency metrics; accepted but not displayed in the TUI.
       # @param session_id [String, nil] Full session id; rendered as first 8 chars (parity with WebUI).
-      def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil, session_id: nil)
+      def update_sessionbar(tasks: nil, status: nil, latency: nil, session_id: nil)
         @tasks_count = tasks if tasks
-        @total_cost = cost if cost
         @session_id = session_id if session_id
         @input_area.update_sessionbar(
           session_id: @session_id,
@@ -122,8 +117,6 @@ module Octo
           mode: @config[:mode],
           model: @config[:model],
           tasks: @tasks_count,
-          cost: @total_cost,
-          cost_source: cost_source,
           status: status
         )
         @layout.render_input
@@ -333,30 +326,6 @@ module Octo
         # Total
         token_info << pastel.dim("Total: #{token_data[:total_tokens]}")
 
-        # Cost for this iteration with color coding (red/yellow for high cost, dim for normal)
-        # :api    => "$0.001234"      (exact, from API)
-        # :price  => "~$0.001234"     (estimated from pricing table)
-        # :default => "N/A"           (model not in pricing table, unknown cost)
-        cost_source = token_data[:cost_source]
-        if cost_source == :default
-          token_info << pastel.dim("Cost: N/A")
-        elsif token_data[:cost]
-          cost = token_data[:cost]
-          cost_value = cost_source == :price ? "~$#{cost.round(6)}" : "$#{cost.round(6)}"
-          if cost >= 0.1
-            # High cost - red warning
-            colored_cost = pastel.decorate(cost_value, :red, :dim)
-            token_info << pastel.dim("Cost: ") + colored_cost
-          elsif cost >= 0.05
-            # Medium cost - yellow warning
-            colored_cost = pastel.decorate(cost_value, :yellow, :dim)
-            token_info << pastel.dim("Cost: ") + colored_cost
-          else
-            # Low cost - normal gray
-            token_info << pastel.dim("Cost: #{cost_value}")
-          end
-        end
-
         # Display through output system (already all dimmed, just add prefix)
         token_display = pastel.dim("    [Tokens] ") + token_info.join(pastel.dim(' | '))
         append_output(token_display)
@@ -502,11 +471,10 @@ module Octo
 
       # Show completion status (only for tasks with more than 5 iterations)
       # @param iterations [Integer] Number of iterations
-      # @param cost [Float] Cost of this run
       # @param duration [Float] Duration in seconds
       # @param cache_stats [Hash] Cache statistics
       # @param awaiting_user_feedback [Boolean] Whether agent is waiting for user feedback
-      def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
+      def show_complete(iterations:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
         # Update status back to 'idle' when task is complete
         update_sessionbar(status: 'idle')
 
@@ -528,7 +496,6 @@ module Octo
 
         output = @renderer.render_task_complete(
           iterations: iterations,
-          cost: cost,
           duration: duration,
           cache_tokens: cache_tokens,
           cache_requests: cache_requests,
@@ -1336,8 +1303,7 @@ module Octo
             working_dir: @config[:working_dir],
             mode: @config[:mode],
             model: @config[:model],
-            tasks: @tasks_count,
-            cost: @total_cost
+            tasks: @tasks_count
           )
         end
       end

@@ -261,8 +261,7 @@ module Octo
         # Refresh UI bar
         ui_controller.config[:model] = config.model_name
         ui_controller.update_sessionbar(
-          tasks: agent.total_tasks,
-          cost: agent.total_cost
+          tasks: agent.total_tasks
         )
 
         # Show summary. Guard api_key slice against empty/short keys.
@@ -399,12 +398,11 @@ module Octo
           created_at = Time.parse(session[:created_at]).strftime("%Y-%m-%d %H:%M")
           session_id = session[:session_id][0..7]
           tasks = session.dig(:stats, :total_tasks) || 0
-          cost = session.dig(:stats, :total_cost_usd) || 0.0
           name = session[:name].to_s.empty? ? "Unnamed session" : session[:name]
           is_current_dir = session[:working_dir] == working_dir
 
           dir_marker = is_current_dir ? "📍" : "  "
-          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks, $#{cost.round(4)}) - #{name}", :cyan
+          say "#{dir_marker} #{index + 1}. [#{session_id}] #{created_at} (#{tasks} tasks) - #{name}", :cyan
         end
         say "\n\n💡 Use `octo -a <session_id>` to resume a session.", :yellow
         say ""
@@ -597,7 +595,7 @@ module Octo
         if session_manager && agent.total_tasks > 0
           session_manager.save(agent.to_session_data(status: :exited))
         end
-        json_ui.emit("done", total_cost: agent.total_cost, total_tasks: agent.total_tasks)
+        json_ui.emit("done", total_tasks: agent.total_tasks)
       end
 
       # Execute a single agent task inside the JSON loop, with error handling.
@@ -605,7 +603,7 @@ module Octo
         json_ui.set_working_status
         yield
         session_manager&.save(agent.to_session_data(status: :success))
-        json_ui.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+        json_ui.update_sessionbar(tasks: agent.total_tasks)
       rescue Octo::AgentInterrupted
         session_manager&.save(agent.to_session_data(status: :interrupted))
         json_ui.emit("interrupted")
@@ -659,7 +657,7 @@ module Octo
           logger:          ->(msg, level:) { ui_controller.log(msg, level: level) }
         ) do |success|
           if success
-            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+            ui_controller.update_sessionbar(tasks: agent.total_tasks)
           end
           ui_controller.set_idle_status
         end
@@ -701,7 +699,6 @@ module Octo
               ui_controller.append_output("")
               ui_controller.append_output("Session saved: #{saved_path}")
               ui_controller.append_output("Tasks completed: #{agent.total_tasks}")
-              ui_controller.append_output("Total cost: $#{agent.total_cost.round(4)}")
               ui_controller.append_output("")
               ui_controller.append_output("To continue this session, run:")
               ui_controller.append_output("  octo -a #{session_id}")
@@ -749,13 +746,13 @@ module Octo
               logger:          ->(msg, level:) { ui_controller.log(msg, level: level) }
             ) do |success|
               if success
-                ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+                ui_controller.update_sessionbar(tasks: agent.total_tasks)
               end
               ui_controller.set_idle_status
             end
             ui_controller.show_info("Session cleared. Starting fresh.")
             # Update session bar with reset values
-            ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost, session_id: agent.session_id)
+            ui_controller.update_sessionbar(tasks: agent.total_tasks, session_id: agent.session_id)
             # Clear todo area display
             ui_controller.update_todos([])
             next
@@ -787,7 +784,6 @@ module Octo
               ui_controller.set_working_status
 
               # Run agent (Agent will call @ui methods directly)
-              # Agent internally tracks total_tasks and total_cost
               result = agent.run(input, files: files)
 
               # Save session after each task
@@ -796,7 +792,7 @@ module Octo
               end
 
               # Update session bar with agent's cumulative stats
-              ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+              ui_controller.update_sessionbar(tasks: agent.total_tasks)
             rescue Octo::AgentInterrupted, StandardError => e
               handle_agent_exception(ui_controller, agent, session_manager, e)
             ensure
@@ -812,7 +808,7 @@ module Octo
           recent_user_messages = agent.get_recent_user_messages(limit: 5)
           ui_controller.initialize_and_show_banner(recent_user_messages: recent_user_messages)
           # Update session bar with restored agent stats
-          ui_controller.update_sessionbar(tasks: agent.total_tasks, cost: agent.total_cost)
+          ui_controller.update_sessionbar(tasks: agent.total_tasks)
         else
           ui_controller.initialize_and_show_banner
         end

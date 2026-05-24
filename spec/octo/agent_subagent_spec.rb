@@ -224,7 +224,6 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
       subagent = agent.fork_subagent
       subagent.instance_variable_set(:@parent_message_count, 1)
       subagent.instance_variable_set(:@iterations, 3)
-      subagent.instance_variable_set(:@total_cost, 0.0025)
       
       # Simulate subagent adding messages
       subagent.history.append({
@@ -240,7 +239,6 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
 
       expect(summary).to include("SUBAGENT SUMMARY")
       expect(summary).to include("3 iterations")
-      expect(summary).to include("$0.0025")
       expect(summary).to include("glob, file_reader")
       expect(summary).to include("I found 5 files")
     end

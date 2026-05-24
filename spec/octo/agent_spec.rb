@@ -21,7 +21,6 @@ RSpec.describe Octo::Agent do
   describe "#initialize" do
     it "sets initial state" do
       expect(agent.iterations).to eq(0)
-      expect(agent.total_cost).to eq(0.0)
       expect(agent.session_id).to be_a(String)
     end
   end
@@ -74,11 +73,6 @@ RSpec.describe Octo::Agent do
     it "tracks iteration count" do
       agent.run("test")
       expect(agent.iterations).to be > 0
-    end
-
-    it "tracks cost" do
-      agent.run("test")
-      expect(agent.total_cost).to be > 0
     end
 
     it "returns a Hash with success status when no pending messages" do
@@ -872,7 +866,6 @@ RSpec.describe Octo::Agent do
 
       expect(restored_agent.session_id).to eq("test-session-123")
       expect(restored_agent.iterations).to eq(5)
-      expect(restored_agent.total_cost).to eq(0.10)
       expect(restored_agent.history.size).to eq(3)
       expect(restored_agent.todos.size).to eq(1)
       expect(restored_agent.working_dir).to eq("/test/dir")

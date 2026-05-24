@@ -135,7 +135,7 @@ RSpec.describe Octo::Agent::MemoryUpdater do
 
     let(:subagent_history) { double("subagent_history", to_a: []) }
 
-    let(:subagent_result) { { total_cost_usd: 0.0123, iterations: 2 } }
+    let(:subagent_result) { { iterations: 2 } }
 
     let(:subagent) do
       sa = double("subagent", config: subagent_config, history: subagent_history)
@@ -160,13 +160,11 @@ RSpec.describe Octo::Agent::MemoryUpdater do
       Class.new do
         include Octo::Agent::MemoryUpdater
 
-        attr_accessor :iterations, :task_start_iterations, :total_cost, :cost_source, :debug_logs, :fork_spy
+        attr_accessor :iterations, :task_start_iterations, :debug_logs, :fork_spy
 
         def initialize(ui:, config:, fork_target:)
           @iterations = 10
           @task_start_iterations = 0
-          @total_cost = 1.0
-          @cost_source = :api
           @debug_logs = []
           @ui = ui
           @config = config
@@ -256,10 +254,9 @@ RSpec.describe Octo::Agent::MemoryUpdater do
       expect(last[:error_class]).to eq("RuntimeError")
     end
 
-    it "merges subagent cost into @total_cost and updates sessionbar" do
-      expect(ui).to receive(:update_sessionbar).with(cost: 1.0 + 0.0123, cost_source: :api)
+    it "runs the memory update subagent without updating sessionbar" do
+      expect(ui).not_to receive(:update_sessionbar)
       full_agent.run_memory_update_subagent
-      expect(full_agent.total_cost).to be_within(1e-9).of(1.0123)
     end
 
     it "stays silent (no show_info) when subagent wrote nothing" do

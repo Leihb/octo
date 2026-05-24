@@ -78,8 +78,8 @@ module Octo
       emit("token_usage", **token_data)
     end
 
-    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil)
-      data = { iterations: iterations, cost: cost }
+    def show_complete(iterations:, duration: nil, cache_stats: nil, awaiting_user_feedback: false)
+      data = { iterations: iterations }
       data[:duration] = duration if duration
       data[:cache_stats] = cache_stats if cache_stats
       data[:awaiting_user_feedback] = awaiting_user_feedback if awaiting_user_feedback
@@ -134,11 +134,9 @@ module Octo
 
     # === State updates ===
 
-    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil)
+    def update_sessionbar(tasks: nil, status: nil, latency: nil)
       data = {}
       data[:tasks] = tasks if tasks
-      data[:cost] = cost if cost
-      data[:cost_source] = cost_source if cost_source
       data[:status] = status if status
       data[:latency] = latency if latency
       emit("session_update", **data) unless data.empty?

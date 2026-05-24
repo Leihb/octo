@@ -298,8 +298,8 @@ module Octo
           raise
         end
 
-        # Track cost and collect token usage data.
-        token_data = track_cost(response[:usage], raw_api_usage: response[:raw_api_usage])
+        # Collect token usage data from API response (no cost tracking)
+        token_data = collect_iteration_tokens(response[:usage])
         response[:token_usage] = token_data
 
         # [DIAG] Log raw client response shape. Only emit when we see the
@@ -764,6 +764,35 @@ module Octo
           return if now - last_emit_at < min_interval && output_tokens > 0
           last_emit_at = now
           @ui.stream_thinking_progress(input_tokens: input_tokens, output_tokens: output_tokens)
+        }
+      end
+
+      # Collect token usage data for current iteration and return it.
+      # Does NOT calculate cost — cost tracking has been removed.
+      # @param usage [Hash] Usage data from API
+      # @return [Hash] token_data ready for show_token_usage
+      def collect_iteration_tokens(usage)
+        prompt_tokens = usage[:prompt_tokens] || 0
+        completion_tokens = usage[:completion_tokens] || 0
+        total_tokens = usage[:total_tokens] || (prompt_tokens + completion_tokens)
+        cache_write = usage[:cache_creation_input_tokens] || 0
+        cache_read = usage[:cache_read_input_tokens] || 0
+
+        delta_tokens =
+          if usage[:total_is_per_turn]
+            total_tokens
+          else
+            total_tokens - @previous_total_tokens
+          end
+        @previous_total_tokens = total_tokens
+
+        {
+          delta_tokens: delta_tokens,
+          prompt_tokens: prompt_tokens,
+          completion_tokens: completion_tokens,
+          total_tokens: total_tokens,
+          cache_write: cache_write,
+          cache_read: cache_read
         }
       end
     end

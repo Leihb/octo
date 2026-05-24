@@ -108,19 +108,11 @@ module Octo
 
         return unless result
 
-        # Merge subagent cost into parent's cumulative session spend so the
-        # sessionbar shows the real total. The parent's task-complete cost
-        # (result[:total_cost_usd] in Agent#run) stays unaffected — it
-        # still reflects ONLY the user's task, not the memory update.
-        subagent_cost = result[:total_cost_usd] || 0.0
-        @total_cost += subagent_cost
-        @ui&.update_sessionbar(cost: @total_cost, cost_source: @cost_source)
-
         # Only surface a completion info line if the subagent actually
         # wrote something to memory. The common "No memory updates needed."
         # path stays silent to avoid visual noise.
         if subagent_wrote_memory?(subagent)
-          @ui&.show_info("Memory updated: #{result[:iterations]} iterations, $#{subagent_cost.round(4)}")
+          @ui&.show_info("Memory updated: #{result[:iterations]} iterations")
         end
       end
 

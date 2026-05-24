@@ -45,7 +45,6 @@ RSpec.describe Octo::CLI, "UI2 slash commands" do
       skill_loader: skill_loader,
       agent_profile: agent_profile,
       total_tasks: 0,
-      total_cost: 0.0,
       session_id: "current-session-id")
   end
 
@@ -83,7 +82,7 @@ RSpec.describe Octo::CLI, "UI2 slash commands" do
   # ── /clear ─────────────────────────────────────────────────────────────────
   describe "/clear" do
     let(:new_agent) do
-      instance_double(Octo::Agent, total_tasks: 0, total_cost: 0.0, session_id: "fresh-session-id")
+      instance_double(Octo::Agent, total_tasks: 0, session_id: "fresh-session-id")
     end
 
     before do
@@ -118,7 +117,7 @@ RSpec.describe Octo::CLI, "UI2 slash commands" do
     end
 
     it "resets the session bar to zero" do
-      expect(ui_controller).to receive(:update_sessionbar).with(tasks: 0, cost: 0.0, session_id: "fresh-session-id")
+      expect(ui_controller).to receive(:update_sessionbar).with(tasks: 0, session_id: "fresh-session-id")
       send_input("/clear")
     end
 

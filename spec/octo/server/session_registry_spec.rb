@@ -71,8 +71,6 @@ RSpec.describe Octo::Server::SessionRegistry do
         expect(snap[:status]).to eq("idle")
         expect(snap[:error]).to be_nil
         expect(snap[:total_tasks]).to be_a(Integer)
-        expect(snap[:total_cost]).to be_a(Numeric)
-        expect(snap[:cost_source]).to be_a(String)
       end
     end
   end

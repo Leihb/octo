@@ -19,7 +19,7 @@ module Octo
     def show_shell_preview(command); end
     def show_diff(old_content, new_content, max_lines: 50); end
     def show_token_usage(token_data); end
-    def show_complete(iterations:, cost:, duration: nil, cache_stats: nil, awaiting_user_feedback: false, cost_source: nil); end
+    def show_complete(iterations:, duration: nil, cache_stats: nil, awaiting_user_feedback: false); end
     def append_output(content); end
 
     # === Status messages ===
@@ -120,7 +120,7 @@ module Octo
     end
 
     # === State updates ===
-    def update_sessionbar(tasks: nil, cost: nil, cost_source: nil, status: nil, latency: nil); end
+    def update_sessionbar(tasks: nil, status: nil, latency: nil); end
     def update_todos(todos); end
 
     def update_background_tasks(running: 0, tasks: []); end

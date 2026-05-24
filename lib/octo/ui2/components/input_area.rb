@@ -65,8 +65,6 @@ module Octo
             mode: nil,
             model: nil,
             tasks: 0,
-            cost: 0.0,
-            cost_source: nil,  # nil / :api / :price / :default — :default means pricing unknown, show N/A
             status: 'idle'  # Workspace status: 'idle' or 'working'
           }
 
@@ -147,17 +145,13 @@ module Octo
         # @param mode [String] Permission mode
         # @param model [String] AI model name
         # @param tasks [Integer] Number of completed tasks
-        # @param cost [Float] Total cost
-        # @param cost_source [Symbol, nil] :api / :price / :default — :default renders as N/A
         # @param status [String] Workspace status ('idle' or 'working')
-        def update_sessionbar(session_id: nil, working_dir: nil, mode: nil, model: nil, tasks: nil, cost: nil, cost_source: nil, status: nil)
+        def update_sessionbar(session_id: nil, working_dir: nil, mode: nil, model: nil, tasks: nil, status: nil)
           @sessionbar_info[:session_id] = session_id if session_id
           @sessionbar_info[:working_dir] = working_dir if working_dir
           @sessionbar_info[:mode] = mode if mode
           @sessionbar_info[:model] = model if model
           @sessionbar_info[:tasks] = tasks if tasks
-          @sessionbar_info[:cost] = cost if cost
-          @sessionbar_info[:cost_source] = cost_source if cost_source
           @sessionbar_info[:status] = status if status
         end
 
@@ -1182,16 +1176,6 @@ module Octo
 
           # Tasks count
           parts << theme.format_text("#{@sessionbar_info[:tasks]} tasks", :statusbar_secondary)
-
-          # Cost
-          # If cost_source is :default (pricing unknown for this model), show N/A
-          # to stay consistent with the per-iteration token line.
-          cost_display = if @sessionbar_info[:cost_source] == :default
-            "$N/A"
-          else
-            format("$%.1f", @sessionbar_info[:cost])
-          end
-          parts << theme.format_text(cost_display, :statusbar_secondary)
 
           " " + parts.join(separator)
         end
