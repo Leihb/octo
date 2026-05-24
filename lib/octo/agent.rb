@@ -1363,6 +1363,12 @@ module Octo
             broadcast_background_tasks_snapshot
           end
 
+          # After killing a terminal handle, immediately refresh the badge so
+          # the UI reflects the new count without waiting for a page reload.
+          if call[:name] == "terminal" && result.is_a?(Hash) && result[:killed]
+            broadcast_background_tasks_snapshot
+          end
+
           # Hook: after_tool_use
           @hooks.trigger(:after_tool_use, call, result)
 
