@@ -10,17 +10,20 @@
   <!-- White circle background -->
   <circle cx="50" cy="50" r="50" fill="#ffffff"/>
 
-  <!-- Gradient ring (thick border) -->
+  <!-- Gradient ring -->
   <circle cx="50" cy="50" r="44" fill="none" stroke="url(#ring)" stroke-width="8"/>
 
-  <!-- Robot face: two eyes -->
-  <circle cx="36" cy="46" r="6" fill="#1e1e2e"/>
-  <circle cx="64" cy="46" r="6" fill="#1e1e2e"/>
+  <!-- Octopus head -->
+  <ellipse cx="50" cy="42" rx="14" ry="12" fill="#1e1e2e"/>
 
-  <!-- Eye shine dots -->
-  <circle cx="38" cy="44" r="2" fill="white"/>
-  <circle cx="66" cy="44" r="2" fill="white"/>
+  <!-- Eyes -->
+  <circle cx="45" cy="40" r="3" fill="#ffffff"/>
+  <circle cx="55" cy="40" r="3" fill="#ffffff"/>
 
-  <!-- Subtle smile -->
-  <path d="M 37,60 Q 50,70 63,60" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Tentacles -->
+  <path d="M 38,52 Q 32,62 30,72" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 44,54 Q 42,66 40,76" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 50,54 Q 50,66 50,76" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 56,54 Q 58,66 60,76" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M 62,52 Q 68,62 70,72" fill="none" stroke="#1e1e2e" stroke-width="3.5" stroke-linecap="round"/>
 </svg>
