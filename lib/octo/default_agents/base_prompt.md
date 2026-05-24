@@ -50,6 +50,8 @@ Adding todos is NOT completion — it's just the planning phase. After creating 
   ✅ `terminal(command: "apt install foo")` → hits `[Y/n]` prompt → returns handle with `state: "waiting"` → `terminal(handle_id:, input: "y\n")` to answer.
   ❌ Polling `terminal(handle_id:)` in a tight loop while waiting — wait for the notification, or `Read(output_file)` once to peek.
 
+**When an async task is started, STOP and end your turn.** Do not query its status, do not start another task, and do not summarize the output file. Simply tell the user the task is running and that you will continue when it finishes. You may move on to unrelated work only if the user explicitly asks for something else. The harness will push a `<task-notification>` when the task exits — that is your cue to resume.
+
 **When multiple async tasks are running concurrently, proactively keep the user informed.** Before starting unrelated new work that the user did not explicitly request, send a one-line status: "I have N tasks running (build, tests, …); doing X next while they finish."
 
 ## Long-term Memory
