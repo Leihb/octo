@@ -141,6 +141,8 @@ module Octo
     # === Input control (CLI layer) ===
     def clear_input; end
     def set_input_tips(message, type: :info); end
+    def show_next_message_suggestion(text); end
+    def hide_next_message_suggestion; end
 
     # === Lifecycle ===
     def stop; end

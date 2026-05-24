@@ -20,6 +20,7 @@ require_relative "agent/system_prompt_builder"
 require_relative "agent/llm_caller"
 require_relative "agent/time_machine"
 require_relative "agent/memory_updater"
+require_relative "agent/next_message_suggester"
 require_relative "agent/skill_evolution"
 require_relative "agent/skill_reflector"
 require_relative "agent/skill_auto_creator"
@@ -36,6 +37,7 @@ module Octo
     include LlmCaller
     include TimeMachine
     include MemoryUpdater
+    include NextMessageSuggester
     include SkillEvolution
     include SkillReflector
     include SkillAutoCreator
@@ -525,6 +527,17 @@ module Octo
             awaiting_user_feedback: awaiting_user_feedback
           )
         end
+
+        # Fire async ghost-text prediction for the user's next message. Must
+        # run AFTER show_complete (so the UI is in its idle "awaiting input"
+        # state) and is fire-and-forget — the suggestion arrives later via
+        # the UI's own +show_next_message_suggestion+ event.
+        # Same guards as run_memory_update_subagent: skip if interrupted,
+        # awaiting feedback, or running as a subagent.
+        unless @is_subagent || task_interrupted || awaiting_user_feedback
+          run_next_message_suggestion!
+        end
+
         @hooks.trigger(:on_complete, result)
         result
       rescue Octo::AgentInterrupted

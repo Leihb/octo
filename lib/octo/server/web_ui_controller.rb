@@ -389,6 +389,13 @@ module Octo
       def clear_input; end
       def set_input_tips(message, type: :info); end
 
+      # Predicted next-user-message ghost text. Web renders as placeholder +
+      # Tab-to-accept. Channel subscribers (Feishu/WeCom) intentionally do
+      # not forward — there's no input box to ghost-text into.
+      def show_next_message_suggestion(text)
+        emit("next_message_suggestion", text: text.to_s)
+      end
+
       # === Lifecycle ===
 
       def stop

@@ -192,6 +192,10 @@ module Octo
       # no-op
     end
 
+    def show_next_message_suggestion(text)
+      emit("next_message_suggestion", text: text.to_s)
+    end
+
     # === Lifecycle ===
 
     def stop
