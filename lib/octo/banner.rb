@@ -30,6 +30,10 @@ module Octo
       @pastel.dim(TAGLINE)
     end
 
+    def highlight(text)
+      @pastel.bright_white(text)
+    end
+
     def full_banner
       "#{logo}\n#{tagline}"
     end

@@ -254,8 +254,8 @@ module Octo
       def print_banner(port_changed: false, original_port: nil)
         banner = Octo::Banner.new
         puts ""
-        puts banner.colored_cli_logo
-        puts banner.colored_tagline
+        puts banner.logo
+        puts banner.tagline
         puts ""
         
         if port_changed

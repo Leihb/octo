@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title id="page-title">{{BRAND_NAME}}</title>
+  <title id="page-title">Octo</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/vendor/hljs/hljs-theme.css">
@@ -33,7 +33,7 @@
       <div id="header-brand" style="cursor:pointer" onclick="Router.navigate('chat')">
         <img class="header-logo-img" id="header-logo-img" src="" alt="" style="display:none">
         <span class="header-logo-divider"></span>
-        <span class="header-logo" id="header-logo">{{BRAND_NAME}}</span>
+        <span class="header-logo" id="header-logo">Octo</span>
         <!-- Owner badge: visible only for creator-tier licenses (user_licensed=true).
              Clicking navigates to Creator Hub. stopPropagation prevents the parent
              #header-brand onclick (which would navigate to chat). -->
@@ -273,7 +273,7 @@
     <!-- Welcome screen -->
     <div id="welcome" class="centered">
       <div class="welcome-icon" style="display:none"></div>
-      <h2 id="welcome-title" data-i18n="welcome.title" data-i18n-vars="brand={{BRAND_NAME}}">Welcome to {{BRAND_NAME}}</h2>
+      <h2 id="welcome-title" data-i18n="welcome.title" data-i18n-vars="brand=Octo">Welcome to Octo</h2>
       <p data-i18n="welcome.body">Create a new session or select one from the sidebar.</p>
       <button id="btn-welcome-new" data-i18n="welcome.btn">New Session</button>
     </div>
@@ -864,7 +864,7 @@
     <!-- Header: logo + brand + subtitle -->
     <div id="setup-header">
       <div id="setup-logo">✦</div>
-      <h1 id="setup-title" data-i18n="onboard.title" data-i18n-vars="brand={{BRAND_NAME}}">Welcome to {{BRAND_NAME}}</h1>
+      <h1 id="setup-title" data-i18n="onboard.title" data-i18n-vars="brand=Octo">Welcome to Octo</h1>
       <p id="setup-subtitle" data-i18n="onboard.subtitle">Let's get you set up in a minute.</p>
     </div>
 
