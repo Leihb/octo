@@ -207,10 +207,21 @@ module Octo
         role      = msg[:role]
         content   = msg[:content]
         tool_calls = msg[:tool_calls]
+        reasoning_content = msg[:reasoning_content]
+
+        # Build thinking block from reasoning_content if present.
+        # Kimi returns thinking as reasoning_content field, but Anthropic API
+        # expects it as a thinking content block. Convert here so the field
+        # doesn't leak as an unknown key to the API.
+        thinking_block = nil
+        if role == "assistant" && reasoning_content.is_a?(String) && !reasoning_content.empty?
+          thinking_block = { type: "thinking", thinking: reasoning_content }
+        end
 
         # assistant with tool_calls → content blocks with tool_use
         if role == "assistant" && tool_calls&.any?
           blocks = []
+          blocks << thinking_block if thinking_block
           blocks << { type: "text", text: content } if content.is_a?(String) && !content.empty?
           if content.is_a?(Array)
             blocks.concat(content_to_blocks(content, strip_thinking_signatures))
@@ -294,6 +305,8 @@ module Octo
         #      user message as a cache breakpoint, which invalidates the intended cache boundary
         #      and results in cache misses (cache_read=0) every turn.
         blocks = content_to_blocks(content, strip_thinking_signatures)
+        # Prepend thinking block for assistant messages with reasoning_content
+        blocks.unshift(thinking_block) if thinking_block
         # Anthropic rejects messages with an empty content array — use a placeholder text block.
         blocks = [{ type: "text", text: "..." }] if blocks.empty?
         { role: role, content: blocks }
