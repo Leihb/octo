@@ -40,6 +40,7 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 	model := fs.String("model", "", "Model name (defaults to the provider's cheapest reasoning model)")
 	system := fs.String("system", "", "System prompt (optional)")
 	maxTokens := fs.Int("max-tokens", 0, "max_tokens for the response (0 = provider default)")
+	stream := fs.Bool("stream", true, "Stream the reply (chunks printed as they arrive); --stream=false buffers")
 
 	if err := fs.Parse(args); err != nil {
 		// flag already printed the help/error; ParseError → exit 2.
@@ -71,6 +72,22 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 	a := agent.New(providerSender{p: prov}, resolvedModel)
 	a.System = *system
 	a.MaxTokens = *maxTokens
+
+	if *stream {
+		// Print each delta as it arrives, then a trailing newline so the
+		// next prompt starts on a fresh line. The aggregated reply.Content
+		// is identical to the joined deltas, so we deliberately do NOT
+		// print it again after the stream closes.
+		_, err := a.TurnStream(context.Background(), userInput, func(d string) {
+			fmt.Fprint(stdout, d)
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "\nocto chat: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout)
+		return 0
+	}
 
 	reply, err := a.Turn(context.Background(), userInput)
 	if err != nil {
@@ -145,11 +162,61 @@ func (s providerSender) SendMessages(ctx context.Context, model, system string, 
 	if err != nil {
 		return agent.Reply{}, err
 	}
+	return replyFromResponse(resp), nil
+}
+
+// StreamMessages implements agent.StreamingSender by delegating to the
+// underlying provider's SendStream — when the provider implements
+// provider.StreamingProvider. If it doesn't (e.g. a future
+// non-streaming-capable backend), we fall back to the buffered Send path
+// and synthesise a single onChunk call with the full content so callers
+// see the same shape either way.
+func (s providerSender) StreamMessages(
+	ctx context.Context,
+	model, system string,
+	msgs []agent.Message,
+	maxTokens int,
+	onChunk func(string),
+) (agent.Reply, error) {
+	if s.p == nil {
+		return agent.Reply{}, errors.New("providerSender: provider is nil")
+	}
+	req := provider.Request{
+		Model:        model,
+		SystemPrompt: system,
+		Messages:     msgs,
+		MaxTokens:    maxTokens,
+	}
+	if sp, ok := s.p.(provider.StreamingProvider); ok {
+		resp, err := sp.SendStream(ctx, req, onChunk)
+		if err != nil {
+			return agent.Reply{}, err
+		}
+		return replyFromResponse(resp), nil
+	}
+
+	resp, err := s.p.Send(ctx, req)
+	if err != nil {
+		return agent.Reply{}, err
+	}
+	if onChunk != nil && resp.Content != "" {
+		onChunk(resp.Content)
+	}
+	return replyFromResponse(resp), nil
+}
+
+func replyFromResponse(resp provider.Response) agent.Reply {
 	return agent.Reply{
 		Content:      resp.Content,
 		Model:        resp.Model,
 		StopReason:   resp.StopReason,
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.OutputTokens,
-	}, nil
+	}
 }
+
+// Compile-time assertions: providerSender satisfies both agent interfaces.
+var (
+	_ agent.Sender          = providerSender{}
+	_ agent.StreamingSender = providerSender{}
+)
