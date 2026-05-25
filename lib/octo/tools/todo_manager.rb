@@ -123,6 +123,18 @@ module Octo
         end
       end
 
+      def format_result_for_ui(result)
+        return nil if result[:error]
+        todos = result[:todos] || result[:completed] || []
+        todos = [result[:todo]] if todos.empty? && result[:todo]
+        {
+          type: "todo",
+          action: result[:action],
+          todos: todos.map { |t| { id: t[:id], task: t[:task], status: t[:status] } },
+          progress: result[:progress]
+        }
+      end
+
 
       def load_todos
         @todos
@@ -220,6 +232,7 @@ module Octo
         result = {
           message: "Task marked as completed",
           todo: todo,
+          todos: todos,
           progress: "#{completed_count}/#{total_count}",
           reminder: "⚠️ REMINDER: Check the PROJECT-SPECIFIC RULES section in your system prompt before continuing to the next task"
         }
@@ -334,6 +347,7 @@ module Octo
         result = {
           message: "#{completed_now.size} task(s) marked as completed",
           completed: completed_now,
+          todos: todos,
           progress: "#{completed_count}/#{total_count}"
         }
 

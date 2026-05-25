@@ -186,8 +186,17 @@ module Octo
       end
 
       def show_diff(old_content, new_content, max_lines: 50)
-        emit("diff", old_size: old_content.bytesize, new_size: new_content.bytesize)
+        require "diffy"
+        diff = Diffy::Diff.new(old_content, new_content, context: 3).to_s
+        diff_lines = diff.lines
+        emit("diff",
+             old_size: old_content.bytesize,
+             new_size: new_content.bytesize,
+             diff: diff_lines.take(max_lines).join,
+             truncated: diff_lines.size > max_lines)
         # Diffs are too verbose for IM — intentionally not forwarded
+      rescue LoadError
+        emit("diff", old_size: old_content.bytesize, new_size: new_content.bytesize)
       end
 
       def show_token_usage(token_data)

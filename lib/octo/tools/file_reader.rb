@@ -316,22 +316,23 @@ module Octo
         }
       end
 
+      LANG_MAP = {
+        ".rb" => "ruby", ".py" => "python", ".js" => "javascript",
+        ".ts" => "typescript", ".jsx" => "jsx", ".tsx" => "tsx",
+        ".java" => "java", ".go" => "go", ".rs" => "rust",
+        ".c" => "c", ".cpp" => "cpp", ".h" => "c",
+        ".cs" => "csharp", ".php" => "php", ".swift" => "swift",
+        ".kt" => "kotlin", ".scala" => "scala", ".r" => "r",
+        ".sh" => "bash", ".zsh" => "bash", ".bash" => "bash",
+        ".yaml" => "yaml", ".yml" => "yaml", ".json" => "json",
+        ".xml" => "xml", ".html" => "html", ".css" => "css",
+        ".scss" => "scss", ".sass" => "scss", ".less" => "less",
+        ".md" => "markdown", ".sql" => "sql", ".dockerfile" => "dockerfile",
+        ".gemfile" => "ruby", ".rake" => "ruby"
+      }.freeze
+
       private def detect_language(path)
         ext = File.extname(path.to_s).downcase
-        LANG_MAP = {
-          ".rb" => "ruby", ".py" => "python", ".js" => "javascript",
-          ".ts" => "typescript", ".jsx" => "jsx", ".tsx" => "tsx",
-          ".java" => "java", ".go" => "go", ".rs" => "rust",
-          ".c" => "c", ".cpp" => "cpp", ".h" => "c",
-          ".cs" => "csharp", ".php" => "php", ".swift" => "swift",
-          ".kt" => "kotlin", ".scala" => "scala", ".r" => "r",
-          ".sh" => "bash", ".zsh" => "bash", ".bash" => "bash",
-          ".yaml" => "yaml", ".yml" => "yaml", ".json" => "json",
-          ".xml" => "xml", ".html" => "html", ".css" => "css",
-          ".scss" => "scss", ".sass" => "scss", ".less" => "less",
-          ".md" => "markdown", ".sql" => "sql", ".dockerfile" => "dockerfile",
-          ".gemfile" => "ruby", ".rake" => "ruby"
-        }.freeze
         LANG_MAP[ext]
       end
 

@@ -146,6 +146,17 @@ module Octo
           msg
         end
       end
+
+      def format_result_for_ui(result)
+        return nil if result[:error]
+        {
+          type: "file_list",
+          path: result[:base_path] || ".",
+          entries: (result[:matches] || []).map { |p| { name: File.basename(p), is_dir: false } },
+          total: result[:total_matches] || 0,
+          truncated: result[:truncated] || false
+        }
+      end
     end
   end
 end

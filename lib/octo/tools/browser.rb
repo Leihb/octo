@@ -100,6 +100,18 @@ module Octo
         "[OK] Done"
       end
 
+      def format_result_for_ui(result)
+        return nil if result[:error]
+        action = result[:action].to_s
+        {
+          type: "browser",
+          action: action,
+          url: result[:url],
+          title: result[:title],
+          content_preview: result[:output].to_s[0, 500]
+        }
+      end
+
       def format_result_for_llm(result)
         return result if result[:error]
 

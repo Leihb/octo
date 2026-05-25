@@ -2061,6 +2061,7 @@ body {
 .tool-item-arg  { color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 25rem; }
 .tool-item-status { margin-left: auto; font-size: 0.6875rem; flex-shrink: 0; }
 .tool-item-status.ok     { color: var(--color-success); }
+.tool-item-status.failed { color: var(--color-error); }
 .tool-item-status.err    { color: var(--color-error); }
 .tool-item-status.running { color: var(--color-accent-primary); animation: pulse 1.2s infinite; }
 .tool-item-stdout {
@@ -2088,6 +2089,143 @@ body {
 .tool-item-stdout .ansi-white   { color: #abb2bf; }
 .tool-item-stdout .ansi-black   { color: #5c6370; }
 .tool-item-stdout .ansi-bold    { font-weight: 700; }
+
+/* ── Rich tool result cards ─────────────────────────────────────────────── */
+.tr-card {
+  margin: 0.25rem 0 2px 0;
+  padding: 0.5rem 0.625rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+.tr-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 0.375rem;
+  flex-wrap: wrap;
+}
+.tr-header:last-child { margin-bottom: 0; }
+.tr-icon { font-size: 0.875rem; line-height: 1; flex-shrink: 0; }
+.tr-path, .tr-query, .tr-cmd, .tr-url {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+.tr-meta {
+  margin-left: auto;
+  font-size: 0.625rem;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.tr-badge {
+  display: inline-block;
+  padding: 1px 0.375rem;
+  border-radius: 3px;
+  background: var(--color-warning-soft, rgba(245, 158, 11, 0.15));
+  color: var(--color-warning, #f59e0b);
+  font-size: 0.625rem;
+  font-weight: 500;
+}
+.tr-code {
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 10rem;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+.tr-code code { background: transparent; padding: 0; }
+.tr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tr-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 2px 0;
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+}
+.tr-list-item.done { opacity: 0.6; text-decoration: line-through; }
+.tr-list-more {
+  padding: 2px 0;
+  font-size: 0.625rem;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+.tr-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+.tr-search-match {
+  padding: 0.375rem 0.5rem;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+}
+.tr-search-file {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.625rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+.tr-search-line {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tr-search-title {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-accent-primary);
+  text-decoration: none;
+}
+.tr-search-title:hover { text-decoration: underline; }
+.tr-search-snippet {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+.tr-text-preview {
+  font-size: 0.6875rem;
+  color: var(--color-text-secondary);
+  max-height: 6rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tr-terminal-output {
+  max-height: 8rem;
+}
+.tr-status-success { border-left: 3px solid var(--color-success, #3fb950); }
+.tr-status-failed  { border-left: 3px solid var(--color-error, #d9534f); }
+.tr-status-error   { border-left: 3px solid var(--color-error, #d9534f); }
+.tr-status-running { border-left: 3px solid var(--color-accent-primary); }
+.tr-status { font-size: 0.625rem; font-weight: 500; text-transform: uppercase; }
+.tr-note {
+  margin-top: 0.25rem;
+  font-size: 0.625rem;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
 
 /* ── Thinking block (collapsible <think>...</think> sections) ─────────────── */
 .thinking-block {
