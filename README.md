@@ -11,7 +11,7 @@
 
 A **functionality-first** AI agent with three equal interfaces.
 
-Octo is a Ruby tool for interacting with AI models via OpenAI-compatible APIs. It provides chat functionality and autonomous AI agent capabilities with tool use. Use it in the **terminal**, in a **web browser**, or through **instant messaging** — all three interfaces are first-class citizens with identical capabilities.
+Octo is a Ruby tool for interacting with AI models. It speaks **Anthropic Messages**, **OpenAI** (Chat Completions + Responses), and **AWS Bedrock** natively, and works with any other provider that exposes one of those API shapes. It provides chat functionality and autonomous AI agent capabilities with tool use. Use it in the **terminal**, in a **web browser**, or through **instant messaging** — all three interfaces are first-class citizens with identical capabilities.
 
 ## Philosophy
 
@@ -33,7 +33,7 @@ Octo is a Ruby tool for interacting with AI models via OpenAI-compatible APIs. I
 | **Web UI** | Full chat interface with multi-session support at `localhost:7070` |
 | **IM Integration** | Feishu, WeCom, WeChat, Discord, Telegram — all with full parity |
 | **Skills** | Install, create, and evolve skills in standard Markdown format |
-| **BYOK** | Bring your own API key — any OpenAI-compatible model |
+| **BYOK** | Bring your own API key — any Anthropic / OpenAI / Bedrock-compatible model |
 | **Autonomous agent** | ReAct pattern with tool execution for complex tasks |
 
 ## Installation
@@ -86,9 +86,9 @@ $ octo
 > /config
 ```
 
-Set your **API Key**, **Model**, and **Base URL** (any OpenAI-compatible provider).
+Set your **API Key**, **Model**, and **Base URL**. Octo routes each model to its native protocol — Anthropic Messages, OpenAI (Chat Completions / Responses), or AWS Bedrock — so you keep features like Claude's `cache_control` byte-for-byte instead of going through a lossy OpenAI shim.
 
-Supported out of the box: **Claude (Anthropic) · GPT (OpenAI) · DeepSeek · Kimi (Moonshot) · MiniMax · OpenRouter** — or any custom endpoint.
+Supported out of the box: **Claude (Anthropic) · GPT (OpenAI) · DeepSeek · Kimi (Moonshot) · MiniMax · OpenRouter · AWS Bedrock · Qwen** — or any custom endpoint that speaks one of the three protocols.
 
 ## Skills
 
