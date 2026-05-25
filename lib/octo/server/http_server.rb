@@ -808,9 +808,9 @@ module Octo
           !output.match?(%r{mirrors\.|aliyun|tuna|ustc|ruby-china})
       end
 
-      # Upgrade via `gem update octo --no-document` (official RubyGems source).
+      # Upgrade via `gem update octo-agent --no-document` (official RubyGems source).
       private def upgrade_via_gem_update
-        cmd = "gem update octo --no-document"
+        cmd = "gem update octo-agent --no-document"
         Octo::Logger.info("[Upgrade] Official source — running: #{cmd}")
         broadcast_all(type: "upgrade_log", line: "Starting upgrade: #{cmd}\n")
 
@@ -822,7 +822,7 @@ module Octo
         success = exit_code&.zero? || false
 
         broadcast_all(type: "upgrade_log", line: output)
-        finish_upgrade(success, fallback_hint: "gem update octo")
+        finish_upgrade(success, fallback_hint: "gem update octo-agent")
       end
 
       # Upgrade via OSS CDN: fetch latest.txt → download .gem → gem install (bypasses mirror lag).
@@ -905,7 +905,7 @@ module Octo
       # is in fact now installed at the latest version, reverse the verdict.
       # This guards against false negatives from the Terminal idle-poll
       # mechanism (see: 0.9.36 upgrade failure bug).
-      private def finish_upgrade(success, fallback_hint: "gem update octo")
+      private def finish_upgrade(success, fallback_hint: "gem update octo-agent")
         if !success && gem_actually_upgraded?
           Octo::Logger.warn("[Upgrade] run_shell reported failure, but installed version matches latest — treating as success.")
           broadcast_all(type: "upgrade_log", line: "\n(Verified: the new version is installed — reclassifying as success.)\n")
@@ -931,7 +931,7 @@ module Octo
         latest = fetch_latest_version_from_rubygems_api
         return false unless latest
 
-        out, exit_code = run_shell("gem list octo -i -v #{latest}", timeout: 30)
+        out, exit_code = run_shell("gem list octo-agent -i -v #{latest}", timeout: 30)
         return false unless exit_code&.zero?
         out.to_s.strip.downcase == "true"
       rescue StandardError => e
@@ -1015,7 +1015,7 @@ module Octo
         require "net/http"
         require "json"
 
-        uri      = URI("https://rubygems.org/api/v1/gems/octo.json")
+        uri      = URI("https://rubygems.org/api/v1/gems/octo-agent.json")
         http     = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl     = true
         http.open_timeout = 5
@@ -1030,11 +1030,11 @@ module Octo
         nil
       end
 
-      # Fall back to `gem list -r octo` via login shell.
+      # Fall back to `gem list -r octo-agent` via login shell.
       # Respects the user's configured gem source (rbenv/mise mirrors, etc.).
       # Output format: "octo (0.9.0)"
       private def fetch_latest_version_from_gem_command
-        out, exit_code = run_shell("gem list -r octo", timeout: 30)
+        out, exit_code = run_shell("gem list -r octo-agent", timeout: 30)
         return nil unless exit_code&.zero?
 
         match = out.match(/^octo\s+\(([^)]+)\)/)

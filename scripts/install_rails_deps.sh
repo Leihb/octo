@@ -705,7 +705,7 @@ main() {
         if [ "$USE_CN_MIRRORS" = true ]; then
             install_cmd='/bin/bash -c "$(curl -sSL https://oss.1024code.com/scripts/install_full.sh)"'
         else
-            install_cmd='/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/octo-ai/octo/main/scripts/install_full.sh)"'
+            install_cmd='/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/Leihb/octo/main/scripts/install_full.sh)"'
         fi
         echo ""
         print_error "Homebrew is not installed — it is required to continue."
