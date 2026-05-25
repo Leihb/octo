@@ -8,7 +8,7 @@
 
 | 编号 | 项目 | Issue | 优先级 | 状态 | 估时 |
 |------|------|-------|--------|------|------|
-| P0-1 | LLM 可调度的 `Task`/`Agent` 子代理工具 | [#2](https://github.com/Leihb/octo/issues/2) | P0 | ⬜ todo | 2d |
+| P0-1 | LLM 可调度的 `Task`/`Agent` 子代理工具 | [#2](https://github.com/Leihb/octo/issues/2) | P0 | ✅ 2026-05-25 | 2d |
 | P0-2 | 通用 MCP 客户端（stdio + SSE） | [#3](https://github.com/Leihb/octo/issues/3) | P0 | ⬜ todo | 5d |
 | P0-3 | `settings.yml` 用户可配置 hook | [#4](https://github.com/Leihb/octo/issues/4) | P0 | ⬜ todo | 3d |
 | P0-4 | `max_turns` / `max_cost_usd` 主循环闸门 | [#5](https://github.com/Leihb/octo/issues/5) | P0 | ✅ 2026-05-25 | 1d |
@@ -40,6 +40,8 @@
 - 不允许子代理递归调用 Agent 工具（防爆栈），通过 `forbidden_tools` 默认排除自身。
 
 **验收**：用例 `spec/octo/tools/agent_spec.rb` 跑通"主代理调 Agent 工具开子代理 → 子代理只能用白名单工具 → 返回字符串结果合并回主对话"。
+
+**完成**：2026-05-25。`lib/octo/tools/agent.rb` 通过 `Octo::Agent#fork_subagent` 封装；参数 `description` / `prompt` / `subagent_type?`（P1-1 占位）/ `tools?` 白名单 / `forbidden_tools?` 黑名单 / `model?`（默认 `lite`）；白名单内部转成"全工具集 - 白名单"的黑名单注入到现有 `before_tool_use` hook；默认 `forbidden_tools` 含 `agent` 自身防递归。子代理结束后 token / USD cost 通过私有 `absorb_session_usage` 合并到父代理的 P0-4 累计器，`/cost` 和 `max_cost_usd` 看到的是完整账单。Spec `spec/octo/tools/agent_tool_spec.rb` 17 个 example。
 
 ---
 

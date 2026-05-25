@@ -122,6 +122,7 @@ require_relative "octo/tools/redo_task"
 require_relative "octo/tools/list_tasks"
 require_relative "octo/tools/browser"
 require_relative "octo/tools/terminal"
+require_relative "octo/tools/agent"
 require_relative "octo/agent"
 
 require_relative "octo/server/session_registry"

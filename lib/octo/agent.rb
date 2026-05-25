@@ -1442,6 +1442,12 @@ module Octo
             args[:agent] = self
           end
 
+          # Sub-agent tool needs access to fork_subagent and the parent
+          # tool registry (for allowlist→denylist resolution).
+          if call[:name] == "agent"
+            args[:agent] = self
+          end
+
           # Inject working_dir so tools don't rely on Dir.chdir global state
           args[:working_dir] = @working_dir if @working_dir
 
@@ -1687,6 +1693,7 @@ module Octo
       @tool_registry.register(Tools::RedoTask.new)
       @tool_registry.register(Tools::ListTasks.new)
       @tool_registry.register(Tools::Browser.new)
+      @tool_registry.register(Tools::Agent.new)
     end
 
     # Fork a subagent with specified configuration
