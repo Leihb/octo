@@ -1,14 +1,12 @@
 // Command octo is the Go implementation of the Octo AI agent.
 //
-// At this milestone (M1.2) the binary wires up:
-//   - `version` / `help` (M1)
-//   - `chat` — single-turn Anthropic Messages call, the first end-to-end
-//     proof that the agent core, the provider interface, and the
-//     Anthropic adapter agree on shapes.
+// Milestones so far:
+//   - M1: version / help / CLI scaffold
+//   - M2: chat (single-turn, streaming, Anthropic + OpenAI)
+//   - M3: interactive REPL + session persistence (this milestone)
 //
-// Streaming, tool use, skills, the web server, and IM bridges land in
-// M2..M5. See dev-docs/CATCHUP_PLAN.md and the README "🚧 Octo is being
-// rewritten in Go" callout for the wider plan.
+// Tool use, skills, the web server, and IM bridges land in M4+.
+// See dev-docs/CATCHUP_PLAN.md for the wider plan.
 package main
 
 import (
@@ -20,12 +18,12 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // run is the testable entry point. Splitting it out keeps main thin and
 // lets the test harness drive the CLI without spawning a subprocess.
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		printUsage(stdout)
 		return 0
@@ -39,7 +37,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		printUsage(stdout)
 		return 0
 	case "chat":
-		return runChat(args[1:], stdout, stderr)
+		return runChat(args[1:], stdin, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "octo: unknown command %q\n", args[0])
 		fmt.Fprintln(stderr, "Run `octo help` for available commands.")
