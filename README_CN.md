@@ -9,6 +9,8 @@
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
+> 本项目硬分叉自 [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky)。上游 MIT 协议及原作者版权完整保留于 [LICENSE.txt](LICENSE.txt)；后续修改 © 2026 Leihb (roy)。
+
 一个**功能优先**的 AI Agent，三种界面一视同仁。
 
 Octo 是一个 Ruby 工具，用于与 AI 模型交互。原生支持 **Anthropic Messages**、**OpenAI**（Chat Completions + Responses）和 **AWS Bedrock** 三套 API 协议，也兼容任何复用这些协议的第三方端点。提供聊天功能和具备工具执行能力的自主 AI Agent。你可以在**终端**、**浏览器**或**即时通讯**中使用它 —— 三种界面都是一等公民，能力完全相同。
