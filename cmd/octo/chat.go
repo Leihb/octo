@@ -30,10 +30,17 @@ var defaultModels = map[string]string{
 	providerOpenAI:    "gpt-4o-mini",
 }
 
-// runChat handles `octo chat [flags] <message>`. It builds an Agent backed by
-// the selected provider (Anthropic or OpenAI) and runs a single Turn — REPL /
-// multi-turn loops land in M3 alongside session persistence.
-func runChat(args []string, stdout, stderr io.Writer) int {
+// runChat handles `octo chat [flags] [message]`.
+//
+// With a positional message argument: single-turn mode (M2 behaviour).
+// Without a message argument: enters the interactive REPL (M3).
+//
+// New M3 flags:
+//
+//	-c / --continue <id>   Resume a saved session by ID (REPL mode only)
+//	--no-save              Disable auto-save in REPL mode
+//	--list-sessions        Print the 10 most recent sessions and exit
+func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	providerName := fs.String("provider", providerAnthropic, "Provider: anthropic | openai")
@@ -41,18 +48,46 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 	system := fs.String("system", "", "System prompt (optional)")
 	maxTokens := fs.Int("max-tokens", 0, "max_tokens for the response (0 = provider default)")
 	stream := fs.Bool("stream", true, "Stream the reply (chunks printed as they arrive); --stream=false buffers")
+	continueID := fs.String("c", "", "Session ID to resume (short flag)")
+	continueIDLong := fs.String("continue", "", "Session ID to resume")
+	noSave := fs.Bool("no-save", false, "Disable auto-save in REPL mode")
+	listSessions := fs.Bool("list-sessions", false, "Print the 10 most recent sessions and exit")
 
 	if err := fs.Parse(args); err != nil {
-		// flag already printed the help/error; ParseError → exit 2.
 		return 2
+	}
+
+	// --list-sessions: print and exit, no provider needed.
+	if *listSessions {
+		sessions, err := agent.ListSessions(10)
+		if err != nil {
+			fmt.Fprintf(stderr, "octo chat: %v\n", err)
+			return 1
+		}
+		if len(sessions) == 0 {
+			fmt.Fprintln(stdout, "No saved sessions.")
+			return 0
+		}
+		fmt.Fprintln(stdout, "Recent sessions (newest first):")
+		for _, s := range sessions {
+			turns := s.TurnCount()
+			plural := "s"
+			if turns == 1 {
+				plural = ""
+			}
+			fmt.Fprintf(stdout, "  %s  %-36s  %d turn%s\n", s.ID, s.Model, turns, plural)
+		}
+		return 0
+	}
+
+	// Resolve -c / --continue (short wins if both somehow set).
+	resumeID := *continueIDLong
+	if *continueID != "" {
+		resumeID = *continueID
 	}
 
 	userInput := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if userInput == "" {
-		fmt.Fprintln(stderr, "octo chat: provide a message as a positional argument")
-		fmt.Fprintln(stderr, "Usage: octo chat [--provider anthropic|openai] [--model <name>] [--system <prompt>] <message>")
-		return 2
-	}
+	isREPL := userInput == ""
 
 	resolvedModel := *model
 	if resolvedModel == "" {
@@ -63,9 +98,14 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	// Single-turn mode requires a message.
+	if !isREPL && resumeID != "" {
+		fmt.Fprintln(stderr, "octo chat: -c/--continue requires interactive mode (omit the message argument)")
+		return 2
+	}
+
 	prov, err := buildProvider(*providerName, stderr)
 	if err != nil {
-		// buildProvider has already printed the user-facing reason.
 		return 1
 	}
 
@@ -73,11 +113,40 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 	a.System = *system
 	a.MaxTokens = *maxTokens
 
+	// ── REPL mode ────────────────────────────────────────────────────────────
+	if isREPL {
+		var sess *agent.Session
+
+		if resumeID != "" {
+			sess, err = agent.LoadSession(resumeID)
+			if err != nil {
+				fmt.Fprintf(stderr, "octo chat: %v\n", err)
+				return 1
+			}
+			// Restore history and override model/system from saved session.
+			a.History = sess.ToHistory()
+			if sess.Model != "" {
+				a.Model = sess.Model
+			}
+			if sess.System != "" {
+				a.System = sess.System
+			}
+		} else {
+			sess = agent.NewSession(resolvedModel, *system)
+		}
+
+		return runREPL(replConfig{
+			a:       a,
+			session: sess,
+			noSave:  *noSave,
+			stdin:   stdin,
+			stdout:  stdout,
+			stderr:  stderr,
+		})
+	}
+
+	// ── Single-turn mode (original M2 behaviour) ──────────────────────────────
 	if *stream {
-		// Print each delta as it arrives, then a trailing newline so the
-		// next prompt starts on a fresh line. The aggregated reply.Content
-		// is identical to the joined deltas, so we deliberately do NOT
-		// print it again after the stream closes.
 		_, err := a.TurnStream(context.Background(), userInput, func(d string) {
 			fmt.Fprint(stdout, d)
 		})
@@ -94,7 +163,6 @@ func runChat(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "octo chat: %v\n", err)
 		return 1
 	}
-
 	fmt.Fprintln(stdout, reply.Content)
 	return 0
 }

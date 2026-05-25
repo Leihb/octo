@@ -51,15 +51,16 @@ type Reply struct {
 
 // Agent owns one conversation: the system prompt, the history of turns, the
 // model name, and the LLM transport (Sender).
-//
-// M1.2 covers a single send-receive turn; tool calls, streaming, and inbox
-// queuing arrive in M2 / M3.
 type Agent struct {
 	System    string
 	Model     string
 	MaxTokens int
 	History   *History
 	Sender    Sender
+
+	// Cumulative token counts for this session (all turns combined).
+	sessionInputTokens  int
+	sessionOutputTokens int
 }
 
 // New constructs an Agent with a fresh History.
@@ -101,6 +102,8 @@ func (a *Agent) Turn(ctx context.Context, userInput string) (Reply, error) {
 	}
 
 	a.History.Append(NewAssistantMessage(reply.Content))
+	a.sessionInputTokens += reply.InputTokens
+	a.sessionOutputTokens += reply.OutputTokens
 	return reply, nil
 }
 
@@ -153,7 +156,54 @@ func (a *Agent) TurnStream(
 	}
 
 	a.History.Append(NewAssistantMessage(reply.Content))
+	a.sessionInputTokens += reply.InputTokens
+	a.sessionOutputTokens += reply.OutputTokens
 	return reply, nil
+}
+
+// SessionTokens returns the cumulative input and output token counts for all
+// turns made so far in this Agent's lifetime.
+func (a *Agent) SessionTokens() (inputTokens, outputTokens int) {
+	return a.sessionInputTokens, a.sessionOutputTokens
+}
+
+// SessionCostUSD returns a rough USD estimate for the tokens used so far.
+// Pricing is based on publicly listed rates as of May 2026 and is best-effort
+// — it uses a prefix match on the model name and falls back to a conservative
+// mid-tier estimate for unknown models.
+func (a *Agent) SessionCostUSD() float64 {
+	in, out := float64(a.sessionInputTokens), float64(a.sessionOutputTokens)
+	inPrice, outPrice := modelPricePerMillion(a.Model)
+	return (in/1_000_000)*inPrice + (out/1_000_000)*outPrice
+}
+
+// modelPricePerMillion returns (inputPricePerMillion, outputPricePerMillion)
+// in USD for the given model name. Prices are approximate and may be stale.
+func modelPricePerMillion(model string) (float64, float64) {
+	switch {
+	// Anthropic Claude 4.x Haiku — cheapest tier
+	case hasPrefix(model, "claude-haiku"):
+		return 0.80, 4.00
+	// Anthropic Claude 4.x Sonnet
+	case hasPrefix(model, "claude-sonnet"):
+		return 3.00, 15.00
+	// Anthropic Claude 4.x Opus
+	case hasPrefix(model, "claude-opus"):
+		return 15.00, 75.00
+	// OpenAI GPT-4o mini
+	case hasPrefix(model, "gpt-4o-mini"):
+		return 0.15, 0.60
+	// OpenAI GPT-4o
+	case hasPrefix(model, "gpt-4o"):
+		return 2.50, 10.00
+	// Unknown — conservative mid-tier estimate
+	default:
+		return 3.00, 15.00
+	}
+}
+
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
 // popLast is an internal helper used by Turn to undo the user-message append

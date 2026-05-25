@@ -13,22 +13,30 @@ import (
 	"github.com/Leihb/octo/internal/provider"
 )
 
-func TestRunChat_MissingMessage(t *testing.T) {
+// TestRunChat_NoArgs_EntersREPL verifies that omitting a message starts the
+// interactive REPL (M3) rather than erroring out (M2 behaviour).
+// We supply an immediate EOF on stdin so the REPL exits without blocking.
+func TestRunChat_NoArgs_EntersREPL(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp) // Windows compat
+	// Fake provider so we don't need a real API key.
 	var stdout, stderr bytes.Buffer
-	code := runChat(nil, &stdout, &stderr)
-	if code != 2 {
-		t.Errorf("exit code = %d, want 2", code)
+	// Immediate EOF → REPL reads nothing and exits cleanly.
+	code := runChat(nil, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "provide a message") {
-		t.Errorf("stderr should mention missing message; got: %q", stderr.String())
+	if !strings.Contains(stdout.String(), "Starting session") {
+		t.Errorf("stdout should contain REPL banner; got: %q", stdout.String())
 	}
 }
 
 func TestRunChat_MissingAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"hello"}, &stdout, &stderr)
+	code := runChat([]string{"hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -59,7 +67,7 @@ func TestRunChat_HonoursAnthropicBaseURL(t *testing.T) {
 	// --stream=false because the fake server above returns a plain JSON body,
 	// not an SSE stream. Streaming end-to-end is covered by
 	// TestRunChat_Anthropic_StreamingEndToEnd below.
-	code := runChat([]string{"--model", "x", "--stream=false", "hello"}, &stdout, &stderr)
+	code := runChat([]string{"--model", "x", "--stream=false", "hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -93,7 +101,7 @@ func TestRunChat_OpenAI_EndToEnd(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	// --stream=false: same rationale as the Anthropic test above; this
 	// fake serves plain JSON, not SSE.
-	code := runChat([]string{"--provider", "openai", "--stream=false", "hello"}, &stdout, &stderr)
+	code := runChat([]string{"--provider", "openai", "--stream=false", "hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -111,7 +119,7 @@ func TestRunChat_OpenAI_EndToEnd(t *testing.T) {
 func TestRunChat_OpenAI_MissingAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"--provider", "openai", "hello"}, &stdout, &stderr)
+	code := runChat([]string{"--provider", "openai", "hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -122,7 +130,7 @@ func TestRunChat_OpenAI_MissingAPIKey(t *testing.T) {
 
 func TestRunChat_UnknownProvider(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"--provider", "bogus", "hello"}, &stdout, &stderr)
+	code := runChat([]string{"--provider", "bogus", "hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
@@ -300,7 +308,7 @@ func TestRunChat_Anthropic_StreamingEndToEnd(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
 
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"hello"}, &stdout, &stderr) // streaming on by default
+	code := runChat([]string{"hello"}, strings.NewReader(""), &stdout, &stderr) // streaming on by default
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -329,7 +337,7 @@ func TestRunChat_OpenAI_StreamingEndToEnd(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"--provider", "openai", "hi"}, &stdout, &stderr)
+	code := runChat([]string{"--provider", "openai", "hi"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
