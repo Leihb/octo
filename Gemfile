@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in openclacky.gemspec
+# Specify your gem's dependencies in octo-agent.gemspec
 gemspec
 
 gem "irb"
