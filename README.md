@@ -1,7 +1,8 @@
 # Octo
 
 [![Build](https://img.shields.io/github/actions/workflow/status/Leihb/octo/main.yml?label=build&style=flat-square)](https://github.com/Leihb/octo/actions)
-[![Release](https://img.shields.io/gem/v/octo?label=release&style=flat-square&color=blue)](https://rubygems.org/gems/octo)
+[![Release](https://img.shields.io/gem/v/octo-agent?label=release&style=flat-square&color=blue)](https://rubygems.org/gems/octo-agent)
+[![Website](https://img.shields.io/badge/website-octo--agent.dev-4f46e5?style=flat-square)](https://octo-agent.dev)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1.0-red?style=flat-square)](https://www.ruby-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
 
@@ -45,7 +46,7 @@ Octo is a Ruby tool for interacting with AI models. It speaks **Anthropic Messag
 Requires Ruby >= 3.1.0
 
 ```bash
-gem install octo
+gem install octo-agent
 ```
 
 ### One-line installer (macOS / Ubuntu)

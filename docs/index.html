@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Octo — a functionality-first AI agent</title>
+  <meta name="description" content="A functionality-first AI agent with three equal interfaces — terminal CLI, web UI, and IM bridges. Speaks Anthropic Messages, OpenAI, and AWS Bedrock natively.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E🐙%3C/text%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #fdfdfd;
+      --fg: #1a1a1a;
+      --muted: #6b7280;
+      --accent: #4f46e5;
+      --code-bg: #f5f5f4;
+      --border: #e5e5e5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --fg: #e6edf3;
+        --muted: #8b949e;
+        --accent: #818cf8;
+        --code-bg: #161b22;
+        --border: #30363d;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
+    h1 { font-size: 2.5rem; font-weight: 700; margin: 0 0 .5rem; letter-spacing: -0.02em; }
+    h1 .emoji { margin-right: .4rem; }
+    .tagline { font-size: 1.15rem; color: var(--muted); margin: 0 0 2.5rem; }
+    section { margin: 2.5rem 0; }
+    h2 { font-size: 1.15rem; font-weight: 600; margin: 0 0 .75rem; }
+    p { margin: .5rem 0; }
+    code, pre {
+      font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      margin: .75rem 0;
+    }
+    .install pre { font-size: 1.05em; }
+    code.inline {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.1em 0.4em;
+      font-size: 0.9em;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.15rem;
+    }
+    .card h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 .35rem;
+    }
+    .card p {
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin: 0;
+    }
+    .cta {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      padding: 0.6rem 1.1rem;
+      border-radius: 8px;
+      font-weight: 500;
+      margin-right: .5rem;
+      margin-top: 1rem;
+    }
+    .cta.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    a { color: var(--accent); }
+    footer {
+      margin-top: 4rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1><span class="emoji">🐙</span>Octo</h1>
+      <p class="tagline">A functionality-first AI agent with three equal interfaces.</p>
+    </header>
+
+    <section class="install">
+      <h2>Install</h2>
+      <pre><code>gem install octo-agent</code></pre>
+      <p style="color: var(--muted); font-size: 0.9rem;">Requires Ruby ≥ 3.1. Run <code class="inline">octo</code> for the CLI or <code class="inline">octo server</code> for the web UI at <code class="inline">localhost:8888</code>.</p>
+    </section>
+
+    <section>
+      <h2>Three faces, one agent</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Terminal</h3>
+          <p>First-class CLI. Streaming, tool calls, sessions, skills.</p>
+        </div>
+        <div class="card">
+          <h3>Web UI</h3>
+          <p>Local web app at <code class="inline">:8888</code>. Same agent, richer rendering.</p>
+        </div>
+        <div class="card">
+          <h3>IM bridges</h3>
+          <p>Feishu, WeCom, WeChat, Discord, Telegram, DingTalk.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Three native API protocols</h2>
+      <p style="color: var(--muted);">Speaks <strong>Anthropic Messages</strong>, <strong>OpenAI</strong> (Chat Completions + Responses), and <strong>AWS Bedrock</strong> natively — dispatched per-provider, per-model. Any provider that exposes one of these shapes works out of the box.</p>
+    </section>
+
+    <section>
+      <h2>What Octo is not</h2>
+      <ul style="color: var(--muted); padding-left: 1.25rem;">
+        <li>Not a token-minimization obsession — functionality comes first.</li>
+        <li>Not web-first — no master-worker architecture imposed on local CLI usage.</li>
+        <li>Not a marketplace — no encrypted skills, no commercial skill ecosystem.</li>
+      </ul>
+    </section>
+
+    <section>
+      <a class="cta" href="https://github.com/Leihb/octo">GitHub</a>
+      <a class="cta secondary" href="https://github.com/Leihb/octo/blob/main/README.md">README</a>
+      <a class="cta secondary" href="https://github.com/Leihb/octo/blob/main/CHANGELOG.md">Changelog</a>
+    </section>
+
+    <footer>
+      MIT licensed. Hard fork of <a href="https://github.com/clacky-ai/openclacky">clacky-ai/openclacky</a> at upstream 1.1.6; original copyright preserved in <a href="https://github.com/Leihb/octo/blob/main/LICENSE.txt">LICENSE.txt</a>.
+    </footer>
+  </div>
+</body>
+</html>
