@@ -25,7 +25,7 @@ Octo is being rewritten in Go. The Ruby line ended at `v0.11.2-final-ruby` (pres
 - **Tag `v0.11.2-final-ruby`** added on top of `v0.11.2`, and **branch `archive/ruby`** created pointing at the same commit — the canonical access points for the Ruby line going forward.
 
 ### Removed
-- Nothing yet. The Ruby tree under `lib/`, `scripts/`, `spec/` stays on `main` until the Go rewrite reaches parity. A future PR will excise it in one step alongside the Ruby CI workflow.
+- **Ruby CI workflows** (`.github/workflows/main.yml`, `.github/workflows/smoke_test.yml`) — the Ruby tree on `main` is frozen and the green/red Ruby signal is no longer meaningful. Go CI matrix (1.22 / 1.23 × Linux / macOS / Windows) remains. The Ruby tree under `lib/`, `scripts/`, `spec/` itself stays on `main` until the Go rewrite reaches parity; a later PR will excise it.
 
 ## [0.11.2] - 2026-05-25
 

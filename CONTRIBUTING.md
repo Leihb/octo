@@ -82,7 +82,7 @@ PR description.
 
 - Pull the latest `main` (`git pull --ff-only origin main`) and create a topic branch off it. Use a descriptive name with a type prefix: `fix/...`, `feat/...`, `chore/...`, `docs/...`.
 - Commit on the topic branch only. Push the branch to `origin` and open a PR against `main`.
-- CI must be **green on all three Ruby versions** in the matrix (4.0, 3.3.5, 2.6) AND on the **Go matrix** (1.22 / 1.23 × Linux / macOS / Windows) before the PR can merge.
+- CI must be **green on the Go matrix** (1.22 / 1.23 × Linux / macOS / Windows) before the PR can merge.
 - Your branch must be **up to date with `main`** before merging — rebase or merge the latest `main` in if it has moved.
 - Force-pushes to `main` and deletion of `main` are blocked at the GitHub level.
 
