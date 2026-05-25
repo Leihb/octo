@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 This project is a hard fork of [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky) at upstream **1.1.6**, renumbered as **0.10.0** in this fork's own SemVer line. Only changes made in this fork (0.11.x and later) are tracked here. For history prior to the fork, see the upstream repository.
 
+## [Unreleased — 0.12.0-dev] — Go rewrite in progress
+
+Octo is being rewritten in Go. The Ruby line ended at `v0.11.2-final-ruby` (preserved on the `archive/ruby` branch); from here, `main` mixes the frozen Ruby tree with the in-progress Go tree until Go reaches feature parity.
+
+### Added
+- **Go module scaffolding** — `go.mod` at module path `github.com/Leihb/octo`, `cmd/octo/main.go` entrypoint wiring up `version`/`help`, `internal/version` with `-ldflags`-overridable `Version` and `Commit` variables (PR #28).
+- **Go CI matrix** — `.github/workflows/go.yml` runs `go vet`, `gofmt -l`, `go build`, `go test -race` against Go 1.22 and 1.23 on Linux, macOS, and Windows — including the first proof that the Go tree builds and tests on native Windows.
+- **Makefile** — `make build / test / cover / vet / fmt / fmt-check / tidy / install / clean` targets. `VERSION` and `COMMIT` are injected at build time via `-ldflags`; release builds set `VERSION` explicitly (e.g. `VERSION=0.12.0 make build`).
+
+### Changed
+- **Ruby implementation frozen** at `v0.11.2-final-ruby` (PR #27). README / README_CN now carry a 🚧 callout above the fold. `.octorules` instructs future contributors to keep new Ruby features off `main`.
+- **Tag `v0.11.2-final-ruby`** added on top of `v0.11.2`, and **branch `archive/ruby`** created pointing at the same commit — the canonical access points for the Ruby line going forward.
+
+### Removed
+- Nothing yet. The Ruby tree under `lib/`, `scripts/`, `spec/` stays on `main` until the Go rewrite reaches parity. A future PR will excise it in one step alongside the Ruby CI workflow.
+
 ## [0.11.2] - 2026-05-25
 
 ### Fixed
