@@ -47,7 +47,20 @@ Octo 是一个 Ruby 工具，用于与 AI 模型交互。原生支持 **Anthropi
 
 ## 安装
 
-### RubyGem
+### 从源码构建 Go 版本（开发中）
+
+Go 重写目前只是脚手架——只通了 `octo version` 和 `octo help`——但二进制能构建，CI 已覆盖 Linux / macOS / Windows。
+
+```bash
+git clone https://github.com/Leihb/octo.git
+cd octo
+make build      # 生成 ./octo
+./octo version
+```
+
+`make install` 把二进制放到 `$GOPATH/bin`。需要 Go 1.22+。
+
+### RubyGem（冻结状态）
 
 需要 Ruby >= 3.1.0
 

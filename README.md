@@ -47,7 +47,20 @@ Octo is a Ruby tool for interacting with AI models. It speaks **Anthropic Messag
 
 ## Installation
 
-### RubyGem
+### Building the in-progress Go version (from source)
+
+The Go rewrite is just scaffolding right now — only `octo version` and `octo help` are wired up — but the binary builds and the CI matrix already covers Linux, macOS, and Windows.
+
+```bash
+git clone https://github.com/Leihb/octo.git
+cd octo
+make build      # produces ./octo
+./octo version
+```
+
+`make install` puts the binary on `$GOPATH/bin`. Requires Go 1.22+.
+
+### RubyGem (frozen Ruby line)
 
 Requires Ruby >= 3.1.0
 
