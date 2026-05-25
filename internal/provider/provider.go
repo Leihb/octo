@@ -1,7 +1,13 @@
-// Package provider defines the contract every LLM backend implements. M1.2
-// only exposes a non-streaming Send method; streaming and tool-call
-// callbacks land in M2 alongside the Anthropic / OpenAI / Bedrock
-// aggregators.
+// Package provider defines the contract every LLM backend implements.
+//
+// Two interfaces live here:
+//   - Provider — non-streaming Send. Required.
+//   - StreamingProvider — adds SendStream, which delivers the assistant
+//     reply chunk-by-chunk via a callback. Optional; callers type-assert
+//     to detect support and fall back to Provider.Send if absent.
+//
+// Tool-call dispatch lands in a later milestone alongside the per-provider
+// content-block aggregators.
 package provider
 
 import (
@@ -43,4 +49,23 @@ type Provider interface {
 	// ctx cancellation and surface HTTP / decode errors as a wrapped
 	// error.
 	Send(ctx context.Context, req Request) (Response, error)
+}
+
+// StreamingProvider extends Provider with the ability to stream the
+// assistant reply chunk-by-chunk via a callback.
+//
+// Implementations must invoke onChunk synchronously as each text delta
+// arrives off the wire. After the stream closes they return the
+// aggregated Response — Content is the full joined text, plus whatever
+// usage / model / stop-reason metadata the protocol surfaces.
+//
+// Callers detect streaming support via a type assertion:
+//
+//	if sp, ok := p.(provider.StreamingProvider); ok {
+//	    return sp.SendStream(ctx, req, onChunk)
+//	}
+//	return p.Send(ctx, req)  // fall back to batch
+type StreamingProvider interface {
+	Provider
+	SendStream(ctx context.Context, req Request, onChunk func(textDelta string)) (Response, error)
 }

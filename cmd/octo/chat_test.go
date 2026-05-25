@@ -56,7 +56,10 @@ func TestRunChat_HonoursAnthropicBaseURL(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
 
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"--model", "x", "hello"}, &stdout, &stderr)
+	// --stream=false because the fake server above returns a plain JSON body,
+	// not an SSE stream. Streaming end-to-end is covered by
+	// TestRunChat_Anthropic_StreamingEndToEnd below.
+	code := runChat([]string{"--model", "x", "--stream=false", "hello"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -88,7 +91,9 @@ func TestRunChat_OpenAI_EndToEnd(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "") // ensure we're testing the openai branch
 
 	var stdout, stderr bytes.Buffer
-	code := runChat([]string{"--provider", "openai", "hello"}, &stdout, &stderr)
+	// --stream=false: same rationale as the Anthropic test above; this
+	// fake serves plain JSON, not SSE.
+	code := runChat([]string{"--provider", "openai", "--stream=false", "hello"}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
@@ -196,4 +201,139 @@ func (m *mockProvider) Name() string { return "mock" }
 func (m *mockProvider) Send(_ context.Context, req provider.Request) (provider.Response, error) {
 	m.gotReq = req
 	return m.reply, m.err
+}
+
+// streamingMockProvider also implements provider.StreamingProvider so we can
+// verify providerSender.StreamMessages picks the streaming path when the
+// underlying provider supports it.
+type streamingMockProvider struct {
+	mockProvider
+	deltas       []string
+	streamReply  provider.Response
+	streamCalled bool
+}
+
+func (m *streamingMockProvider) SendStream(_ context.Context, req provider.Request, onChunk func(string)) (provider.Response, error) {
+	m.streamCalled = true
+	m.gotReq = req
+	for _, d := range m.deltas {
+		if onChunk != nil {
+			onChunk(d)
+		}
+	}
+	if m.err != nil {
+		return provider.Response{}, m.err
+	}
+	return m.streamReply, nil
+}
+
+func TestProviderSender_StreamingPathPreferred(t *testing.T) {
+	fake := &streamingMockProvider{
+		deltas:      []string{"hi ", "there"},
+		streamReply: provider.Response{Content: "hi there", Model: "m", StopReason: "end_turn"},
+	}
+	s := providerSender{p: fake}
+
+	var got []string
+	reply, err := s.StreamMessages(
+		context.Background(), "m", "",
+		[]agent.Message{agent.NewUserMessage("hi")}, 0,
+		func(d string) { got = append(got, d) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fake.streamCalled {
+		t.Error("expected SendStream to be called when provider supports it")
+	}
+	if reply.Content != "hi there" {
+		t.Errorf("Content = %q", reply.Content)
+	}
+	if len(got) != 2 || got[0] != "hi " || got[1] != "there" {
+		t.Errorf("chunks = %v", got)
+	}
+}
+
+func TestProviderSender_StreamingFallback_NonStreamingProvider(t *testing.T) {
+	// mockProvider only implements provider.Provider — not StreamingProvider.
+	// providerSender.StreamMessages must fall back to Send and synthesise
+	// a single onChunk call with the full content.
+	fake := &mockProvider{reply: provider.Response{Content: "buffered"}}
+	s := providerSender{p: fake}
+
+	var got []string
+	reply, err := s.StreamMessages(
+		context.Background(), "m", "",
+		[]agent.Message{agent.NewUserMessage("hi")}, 0,
+		func(d string) { got = append(got, d) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Content != "buffered" {
+		t.Errorf("Content = %q", reply.Content)
+	}
+	if len(got) != 1 || got[0] != "buffered" {
+		t.Errorf("fallback should emit one chunk with full content; got %v", got)
+	}
+}
+
+func TestRunChat_Anthropic_StreamingEndToEnd(t *testing.T) {
+	// Full chain: runChat → agent.TurnStream → providerSender.StreamMessages
+	// → anthropic.SendStream → SSE parse → callback → stdout.
+	sse := "" +
+		`data: {"type":"message_start","message":{"id":"m","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":1,"output_tokens":0}}}` + "\n\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi "}}` + "\n\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}` + "\n\n" +
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"output_tokens":2}}` + "\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept"); got != "text/event-stream" {
+			t.Errorf("Accept = %q, want text/event-stream", got)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sse))
+	}))
+	defer srv.Close()
+
+	t.Setenv("ANTHROPIC_API_KEY", "k")
+	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
+
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"hello"}, &stdout, &stderr) // streaming on by default
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "hi there") {
+		t.Errorf("stdout should contain streamed reply; got: %q", out)
+	}
+}
+
+func TestRunChat_OpenAI_StreamingEndToEnd(t *testing.T) {
+	sse := "" +
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant"}}]}` + "\n\n" +
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"howdy "}}]}` + "\n\n" +
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"partner"}}]}` + "\n\n" +
+		`data: {"id":"c1","object":"chat.completion.chunk","model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sse))
+	}))
+	defer srv.Close()
+
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("OPENAI_BASE_URL", srv.URL)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"--provider", "openai", "hi"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "howdy partner") {
+		t.Errorf("stdout should contain streamed reply; got: %q", stdout.String())
+	}
 }

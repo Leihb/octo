@@ -6,13 +6,13 @@ package anthropic
 
 // apiRequest is the wire-level JSON body of POST /v1/messages.
 //
-// Only the fields M1.2 needs are wired up. Tool definitions, streaming,
-// metadata, and the rest land in M2.
+// Tool definitions and request metadata arrive in later milestones.
 type apiRequest struct {
 	Model     string       `json:"model"`
 	MaxTokens int          `json:"max_tokens"`
 	System    string       `json:"system,omitempty"`
 	Messages  []apiMessage `json:"messages"`
+	Stream    bool         `json:"stream,omitempty"`
 }
 
 // apiMessage is one element of apiRequest.Messages.
@@ -57,4 +57,37 @@ type apiError struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// streamEvent is the per-event payload Anthropic sends on the SSE stream.
+// Reference: https://docs.anthropic.com/en/api/messages-streaming
+//
+// The union covers message_start, content_block_start, content_block_delta,
+// content_block_stop, message_delta, message_stop, ping, and error events.
+// We only act on a subset; the rest is ignored.
+type streamEvent struct {
+	Type    string         `json:"type"`
+	Index   int            `json:"index,omitempty"`   // content_block_*
+	Message *streamMessage `json:"message,omitempty"` // message_start
+	Delta   *streamDelta   `json:"delta,omitempty"`   // content_block_delta, message_delta
+	Usage   *apiUsageBlock `json:"usage,omitempty"`   // message_delta
+}
+
+// streamMessage is the abridged message snapshot inside a message_start event.
+// Only fields we currently read are kept; the rest of the JSON is allowed
+// to flow past untouched.
+type streamMessage struct {
+	ID    string        `json:"id,omitempty"`
+	Model string        `json:"model,omitempty"`
+	Usage apiUsageBlock `json:"usage"`
+}
+
+// streamDelta is the per-delta payload inside content_block_delta and
+// message_delta events.
+//   - content_block_delta: Type=="text_delta", Text holds the new bytes
+//   - message_delta:        StopReason set when the model stops
+type streamDelta struct {
+	Type       string `json:"type,omitempty"`
+	Text       string `json:"text,omitempty"`
+	StopReason string `json:"stop_reason,omitempty"`
 }

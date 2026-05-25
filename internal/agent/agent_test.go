@@ -113,3 +113,119 @@ func TestAgent_Turn_Validation(t *testing.T) {
 		t.Error("empty input should error")
 	}
 }
+
+// fakeStreamSender implements StreamingSender, emitting a canned slice of
+// deltas before returning the aggregated reply.
+type fakeStreamSender struct {
+	fakeSender
+	chunks       []string
+	gotCallback  bool
+	emittedReply Reply
+}
+
+func (f *fakeStreamSender) StreamMessages(
+	ctx context.Context,
+	model, system string,
+	messages []Message,
+	maxTokens int,
+	onChunk func(string),
+) (Reply, error) {
+	// Record inputs through the embedded fakeSender so the existing
+	// assertions on gotModel/gotMessages still apply.
+	f.fakeSender.gotModel = model
+	f.fakeSender.gotSystem = system
+	f.fakeSender.gotMessages = append([]Message(nil), messages...)
+	f.fakeSender.gotMaxToks = maxTokens
+
+	if f.fakeSender.err != nil {
+		return Reply{}, f.fakeSender.err
+	}
+	for _, c := range f.chunks {
+		if onChunk != nil {
+			f.gotCallback = true
+			onChunk(c)
+		}
+	}
+	return f.emittedReply, nil
+}
+
+func TestAgent_TurnStream_HappyPath(t *testing.T) {
+	send := &fakeStreamSender{
+		chunks:       []string{"hi ", "there"},
+		emittedReply: Reply{Content: "hi there", Model: "m", StopReason: "end_turn"},
+	}
+	a := New(send, "m")
+	a.System = "you are octo"
+
+	var got []string
+	reply, err := a.TurnStream(context.Background(), "hello", func(d string) {
+		got = append(got, d)
+	})
+	if err != nil {
+		t.Fatalf("TurnStream: %v", err)
+	}
+	if reply.Content != "hi there" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+	if got[0] != "hi " || got[1] != "there" {
+		t.Errorf("chunks = %v", got)
+	}
+	if !send.gotCallback {
+		t.Errorf("StreamMessages received nil callback")
+	}
+
+	// History: user + assistant, same as the buffered path.
+	snap := a.History.Snapshot()
+	if len(snap) != 2 || snap[0].Role != RoleUser || snap[1].Role != RoleAssistant {
+		t.Errorf("History = %+v", snap)
+	}
+}
+
+func TestAgent_TurnStream_NilCallback(t *testing.T) {
+	send := &fakeStreamSender{
+		chunks:       []string{"a", "b"},
+		emittedReply: Reply{Content: "ab"},
+	}
+	a := New(send, "m")
+
+	reply, err := a.TurnStream(context.Background(), "hi", nil)
+	if err != nil {
+		t.Fatalf("TurnStream: %v", err)
+	}
+	if reply.Content != "ab" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+}
+
+func TestAgent_TurnStream_BufferedFallback(t *testing.T) {
+	// A plain Sender (no StreamingSender) should still work — TurnStream
+	// must fall back to SendMessages and synthesise a single onChunk call.
+	send := &fakeSender{reply: Reply{Content: "buffered reply"}}
+	a := New(send, "m")
+
+	var got []string
+	reply, err := a.TurnStream(context.Background(), "hi", func(d string) {
+		got = append(got, d)
+	})
+	if err != nil {
+		t.Fatalf("TurnStream: %v", err)
+	}
+	if reply.Content != "buffered reply" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+	if len(got) != 1 || got[0] != "buffered reply" {
+		t.Errorf("fallback should emit one chunk with the full content, got %v", got)
+	}
+}
+
+func TestAgent_TurnStream_Error_RestoresHistory(t *testing.T) {
+	send := &fakeStreamSender{fakeSender: fakeSender{err: errors.New("boom")}}
+	a := New(send, "m")
+
+	if _, err := a.TurnStream(context.Background(), "hi", nil); err == nil {
+		t.Fatal("expected error")
+	}
+	if n := a.History.Len(); n != 0 {
+		t.Errorf("History.Len = %d after failed TurnStream, want 0", n)
+	}
+}
