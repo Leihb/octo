@@ -31,12 +31,13 @@ This project is a hard fork of [clacky-ai/openclacky](https://github.com/clacky-
 
 ## [0.11.0] - 2026-05-25
 
-First release published under the new `octo` project name after hard-forking from `clacky-ai/openclacky`. The bulk of this release is rebranding, removing upstream-specific subsystems, and bringing forward openclacky features that hadn't shipped at the fork point.
+First release of this fork. The hard fork happened because of philosophical disagreements with upstream over how the agent should treat human-in-the-loop interactions and long-running work; the three "headline" features below are the concrete expression of that disagreement and the reason this fork exists as a separate project. The rest of the release is rebranding and excising upstream subsystems that don't fit a non-commercial, single-brand tool.
 
 ### Added
+- **Non-interrupting message inbox.** New user messages that arrive while the agent is mid-run land in a per-session inbox (`@inbox` in `agent.rb`) and are drained at the top of the next iteration, instead of preempting the in-flight tool call. This keeps tool execution atomic and ends the "user types a follow-up and the model loses its current goal" failure mode.
+- **Next-message suggestion (ghost text).** After each agent turn, the agent emits a suggested next user prompt rendered as the textarea placeholder; pressing Tab on an empty input accepts it. Bias is toward "what would a power user type now?", not toward chatty continuation.
+- **Background task notifications subsystem.** Long-running terminal tasks can be launched as background jobs; the agent is notified by the registry when they finish and resumes the conversation with the result, rather than blocking the run loop while a build/test/deploy executes.
 - Command history for both CLI and Web UI
-- Next-message suggestion (ghost-text) ported from openclacky
-- Background task notifications subsystem (migrated `feature/bg-notifications` from openclacky)
 - `dedup_key` on background-terminal tasks to prevent the agent from spawning duplicates
 - Customizable cancel reason for background tasks
 - System-prompt guidance pushing the agent to STOP after starting an async task, and to refine async-task behavior (stop when blocked, continue when independent)
