@@ -76,6 +76,26 @@ PR description.
 
 ---
 
+## 4. Branch & merge workflow
+
+`main` is protected. **No one — including maintainers — pushes directly to `main`.** Every change reaches `main` through a pull request.
+
+- Pull the latest `main` (`git pull --ff-only origin main`) and create a topic branch off it. Use a descriptive name with a type prefix: `fix/...`, `feat/...`, `chore/...`, `docs/...`.
+- Commit on the topic branch only. Push the branch to `origin` and open a PR against `main`.
+- CI must be **green on all three Ruby versions** in the matrix (4.0, 3.3.5, 2.6) before the PR can merge.
+- Your branch must be **up to date with `main`** before merging — rebase or merge the latest `main` in if it has moved.
+- Force-pushes to `main` and deletion of `main` are blocked at the GitHub level.
+
+If you find yourself with local commits on `main`, move them onto a topic branch before pushing:
+
+```sh
+git switch -c fix/your-change           # rename current HEAD to a topic branch
+git switch main && git reset --hard origin/main   # restore main to upstream
+git switch fix/your-change              # back on the topic branch, push from here
+```
+
+---
+
 ## Exceptions
 
 Rules exist to keep the project healthy, not to block valuable work. For
