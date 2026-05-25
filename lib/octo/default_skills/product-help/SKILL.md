@@ -71,7 +71,7 @@ If genuinely unsure between two topics, pick both (max 2).
 The docs are bundled inside the gem. First get the gem installation root:
 
 ```
-terminal(command: "ruby -e \"require 'rubygems'; puts(Gem::Specification.find_by_name('octo').gem_dir rescue Dir.pwd)\"")
+terminal(command: "ruby -e \"require 'rubygems'; puts begin; Gem::Specification.find_by_name('octo').gem_dir; rescue Exception; Dir.pwd; end\"")
 ```
 
 Then read the doc:
