@@ -10,6 +10,12 @@
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
+> ## 🚧 Octo is being rewritten in Go
+>
+> This Ruby implementation is **frozen** as of `v0.11.2-final-ruby`. The full source remains on the [`archive/ruby`](https://github.com/Leihb/octo/tree/archive/ruby) branch and you can still `gem install octo-agent` to use it, but no new features or bug fixes will land on this line.
+>
+> The next-generation Octo is being built in Go to ship as a single binary (zero install dependencies), with native Windows support and the same three-interface, three-protocol design. Track progress on `main` here, or watch the repo for releases. Estimated first Go alpha: 3-4 months.
+
 > This project is a hard fork of [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky). The original MIT copyright is preserved in [LICENSE.txt](LICENSE.txt); modifications are © 2026 Leihb (roy).
 
 A **functionality-first** AI agent with three equal interfaces.

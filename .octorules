@@ -1,5 +1,16 @@
 # Octo Project Rules (.octorules)
 
+## ⚠️ STATUS: Ruby implementation FROZEN — Go rewrite incoming
+
+As of `v0.11.2-final-ruby`, the Ruby codebase is feature-frozen. The full
+Ruby source is preserved on the `archive/ruby` branch. Until the Go rewrite
+lands on `main`:
+
+- **Do not add new features to the Ruby code.** Bug fixes for critical regressions are acceptable on `archive/ruby` but should not land on `main`.
+- **Main is in transition** — it currently still contains the Ruby tree but is being rebuilt in Go. New code on `main` should be Go.
+- **Skill format and product behaviour carry over** to Go intact. Markdown skills, the inbox model, ghost-text suggestion, background-task notifications — these are language-independent designs and will be reimplemented as-is.
+- See `dev-docs/CATCHUP_PLAN.md` and the README "🚧 Octo is being rewritten in Go" callout for the wider context.
+
 ## Project Overview
 This is the `octo` Ruby gem - an AI agent with three equal interfaces (CLI, Web UI, IM bridges) for interacting with AI models (Claude, OpenAI, DeepSeek, Bedrock, etc.).
 It speaks three native API protocols — Anthropic Messages, OpenAI (Chat Completions + Responses), and AWS Bedrock — dispatched per-model in `lib/octo/providers.rb`. It provides chat functionality and autonomous AI agent capabilities with tool use.

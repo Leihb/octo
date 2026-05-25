@@ -10,6 +10,12 @@
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
+> ## 🚧 Octo 正在用 Go 重写
+>
+> 当前 Ruby 实现已**冻结**在 `v0.11.2-final-ruby`。完整源码保留在 [`archive/ruby`](https://github.com/Leihb/octo/tree/archive/ruby) 分支，仍可 `gem install octo-agent` 安装使用，但不再有新功能或修复。
+>
+> 新一代 Octo 用 Go 实现，目标是单二进制零依赖分发、原生 Windows 支持，保持三界面 + 三协议的同样设计。在本仓库 `main` 分支跟踪进度，或 watch 仓库等正式 release。预计 Go alpha 首发：3-4 个月内。
+
 > 本项目硬分叉自 [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky)。上游 MIT 协议及原作者版权完整保留于 [LICENSE.txt](LICENSE.txt)；后续修改 © 2026 Leihb (roy)。
 
 一个**功能优先**的 AI Agent，三种界面一视同仁。
