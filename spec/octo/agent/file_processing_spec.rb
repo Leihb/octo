@@ -142,7 +142,7 @@ RSpec.describe "Agent file processing" do
 
         expect(Octo::Utils::FileProcessor).not_to receive(:process_path)
 
-        a = build_agent(base_url: "https://api.octo.com", model: "abs-claude-opus-4-7")
+        a = build_agent(base_url: "https://openrouter.ai/api/v1", model: "anthropic/claude-opus-4-7")
         stub_llm_reply("Nice")
         a.run("look", files: [{ name: "photo.png", path: path, mime_type: "image/png" }])
 
@@ -204,7 +204,7 @@ RSpec.describe "Agent file processing" do
           .with(path, name: "chart.png")
           .and_return(ref)
 
-        a = build_agent(base_url: "https://api.octo.com", model: "dsk-deepseek-v4-pro")
+        a = build_agent(base_url: "https://api.deepseek.com", model: "deepseek-v4-pro")
         stub_llm_reply("Noted")
         a.run("analyze", files: [{ name: "chart.png", path: path, mime_type: "image/png" }])
 

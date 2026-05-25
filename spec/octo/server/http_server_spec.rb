@@ -435,9 +435,9 @@ RSpec.describe Octo::Server::HttpServer do
       let(:multi_model_config) do
         cfg = Octo::AgentConfig.new(models: [
           {
-            "model"            => "abs-claude-sonnet-4-5",
-            "api_key"          => "octo-aaaaaaaaaaaa1111",
-            "base_url"         => "https://api.octo.com",
+            "model"            => "anthropic/claude-sonnet-4-6",
+            "api_key"          => "sk-or-test1111",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => true,
             "type"             => "default"
           },
@@ -503,7 +503,7 @@ RSpec.describe Octo::Server::HttpServer do
           registry = server.instance_variable_get(:@registry)
           agent = nil
           registry.with_session(session_id) { |s| agent = s[:agent] }
-          expect(agent.current_model_info[:model]).to eq("abs-claude-sonnet-4-5")
+          expect(agent.current_model_info[:model]).to eq("anthropic/claude-sonnet-4-6")
         end
       end
     end

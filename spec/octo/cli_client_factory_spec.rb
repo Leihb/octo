@@ -8,7 +8,7 @@ require "octo/cli"
 #   1. User starts a session on DSK model (dsk-*, base_url http://localhost:3100,
 #      OpenAI-compatible /chat/completions).
 #   2. User presses `/config` and switches to Opus (abs-*, base_url
-#      https://api.octo.com, Bedrock Converse /model/{id}/converse).
+#      https://api.example.com, Bedrock Converse /model/{id}/converse).
 #   3. User presses `/clear`.
 #   4. User sends a chat message → HTTP 404 "page not found".
 #
@@ -17,7 +17,7 @@ require "octo/cli"
 # code path missed @model and @use_bedrock (both only computed in
 # Client#initialize). When `/clear` then did `Agent.new(client, ...)`, the
 # new agent inherited the stale Client → posted to `/chat/completions` on
-# api.octo.com (which only serves `/model/{id}/converse`) → 404.
+# api.example.com (which only serves `/model/{id}/converse`) → 404.
 #
 # Fix: the CLI now holds a `client_factory` lambda (closes over agent_config)
 # and calls it whenever a fresh Client is needed. All model switching goes
@@ -42,7 +42,7 @@ RSpec.describe "CLI client staleness regression (DSK → Opus → /clear)" do
           "name"     => "Opus",
           "model"    => "abs-claude-opus",
           "api_key"  => "octo-opus-key",
-          "base_url" => "https://api.octo.com",
+          "base_url" => "https://api.example.com",
           "type"     => "default"
         }
       ])
@@ -96,7 +96,7 @@ RSpec.describe "CLI client staleness regression (DSK → Opus → /clear)" do
     client = agent.instance_variable_get(:@client)
     expect(client.instance_variable_get(:@model)).to eq("abs-claude-opus")
     expect(client.instance_variable_get(:@use_bedrock)).to eq(true)
-    expect(client.instance_variable_get(:@base_url)).to eq("https://api.octo.com")
+    expect(client.instance_variable_get(:@base_url)).to eq("https://api.example.com")
   end
 
   it "after /config switch THEN /clear (new Agent from factory), the fresh client still has @use_bedrock=true" do
@@ -123,7 +123,7 @@ RSpec.describe "CLI client staleness regression (DSK → Opus → /clear)" do
     # The regression trap: these must all reflect Opus, not stale DSK state.
     expect(fresh_client.instance_variable_get(:@model)).to eq("abs-claude-opus")
     expect(fresh_client.instance_variable_get(:@use_bedrock)).to eq(true)
-    expect(fresh_client.instance_variable_get(:@base_url)).to eq("https://api.octo.com")
+    expect(fresh_client.instance_variable_get(:@base_url)).to eq("https://api.example.com")
     expect(fresh_client.instance_variable_get(:@api_key)).to eq("octo-opus-key")
   end
 

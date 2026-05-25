@@ -1,16 +1,16 @@
 # frozen_string_literal: true
 
 RSpec.describe Octo::AgentConfig, "fallback state machine" do
-  # Minimal config with a octoai-style base_url so fallback_model_for works
+  # Minimal config with an openrouter-style base_url so fallback_model_for works
   let(:config) do
     Octo::AgentConfig.new(
       models: [
         {
           "type"             => "default",
-          "model"            => "abs-claude-sonnet-4-6",
-          "api_key"          => "absk-test",
-          "base_url"         => "https://api.octo.ai/v1",
-          "anthropic_format" => true
+          "model"            => "anthropic/claude-sonnet-4-6",
+          "api_key"          => "sk-or-test",
+          "base_url"         => "https://openrouter.ai/api/v1",
+          "anthropic_format" => false
         }
       ]
     )
@@ -28,14 +28,14 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
     end
 
     it "returns the primary model as effective_model_name" do
-      expect(config.effective_model_name).to eq("abs-claude-sonnet-4-6")
+      expect(config.effective_model_name).to eq("anthropic/claude-sonnet-4-6")
     end
   end
 
   # ── activate_fallback! ─────────────────────────────────────────────────────
 
   describe "#activate_fallback!" do
-    before { config.activate_fallback!("abs-claude-sonnet-4-5") }
+    before { config.activate_fallback!("anthropic/claude-haiku-4-5") }
 
     it "marks fallback as active" do
       expect(config.fallback_active?).to be true
@@ -46,7 +46,7 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
     end
 
     it "returns fallback model as effective_model_name" do
-      expect(config.effective_model_name).to eq("abs-claude-sonnet-4-5")
+      expect(config.effective_model_name).to eq("anthropic/claude-haiku-4-5")
     end
 
     it "records fallback_since timestamp" do
@@ -68,7 +68,7 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
 
     context "when cooling-off has NOT expired" do
       before do
-        config.activate_fallback!("abs-claude-sonnet-4-5")
+        config.activate_fallback!("anthropic/claude-haiku-4-5")
         # Pretend activated just 1 minute ago
         config.instance_variable_set(:@fallback_since, Time.now - 60)
       end
@@ -81,13 +81,13 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
 
       it "still serves fallback model" do
         config.maybe_start_probing
-        expect(config.effective_model_name).to eq("abs-claude-sonnet-4-5")
+        expect(config.effective_model_name).to eq("anthropic/claude-haiku-4-5")
       end
     end
 
     context "when cooling-off has expired (30 min passed)" do
       before do
-        config.activate_fallback!("abs-claude-sonnet-4-5")
+        config.activate_fallback!("anthropic/claude-haiku-4-5")
         config.instance_variable_set(:@fallback_since, Time.now - 31 * 60)
       end
 
@@ -103,7 +103,7 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
 
       it "serves PRIMARY model when probing (silent test)" do
         config.maybe_start_probing
-        expect(config.effective_model_name).to eq("abs-claude-sonnet-4-6")
+        expect(config.effective_model_name).to eq("anthropic/claude-sonnet-4-6")
       end
     end
   end
@@ -113,7 +113,7 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
   describe "#confirm_fallback_ok!" do
     context "when probing and primary responds successfully" do
       before do
-        config.activate_fallback!("abs-claude-sonnet-4-5")
+        config.activate_fallback!("anthropic/claude-haiku-4-5")
         config.instance_variable_set(:@fallback_since, Time.now - 31 * 60)
         config.maybe_start_probing  # → :probing
         config.confirm_fallback_ok!
@@ -128,13 +128,13 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
       end
 
       it "returns primary model as effective_model_name again" do
-        expect(config.effective_model_name).to eq("abs-claude-sonnet-4-6")
+        expect(config.effective_model_name).to eq("anthropic/claude-sonnet-4-6")
       end
     end
 
     context "when in :fallback_active (not probing yet)" do
       before do
-        config.activate_fallback!("abs-claude-sonnet-4-5")
+        config.activate_fallback!("anthropic/claude-haiku-4-5")
         config.confirm_fallback_ok!  # should be no-op
       end
 
@@ -155,12 +155,12 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
 
   describe "renewing cooling-off via activate_fallback!" do
     it "resets the clock when called again" do
-      config.activate_fallback!("abs-claude-sonnet-4-5")
+      config.activate_fallback!("anthropic/claude-haiku-4-5")
       # Pretend it was activated 35 min ago (cooling-off expired)
       config.instance_variable_set(:@fallback_since, Time.now - 35 * 60)
 
       # Calling activate_fallback! again renews the timestamp
-      config.activate_fallback!("abs-claude-sonnet-4-5")
+      config.activate_fallback!("anthropic/claude-haiku-4-5")
       ts = config.instance_variable_get(:@fallback_since)
       expect(ts).to be_within(2).of(Time.now)
 
@@ -174,12 +174,12 @@ RSpec.describe Octo::AgentConfig, "fallback state machine" do
 
   describe "#fallback_model_for" do
     it "returns the configured fallback for the primary model" do
-      result = config.fallback_model_for("abs-claude-sonnet-4-6")
-      expect(result).to eq("abs-claude-sonnet-4-5")
+      result = config.fallback_model_for("anthropic/claude-sonnet-4-6")
+      expect(result).to eq("anthropic/claude-haiku-4-5")
     end
 
     it "returns nil for a model with no fallback configured" do
-      result = config.fallback_model_for("abs-claude-haiku-4")
+      result = config.fallback_model_for("anthropic/claude-haiku-4-5")
       expect(result).to be_nil
     end
   end

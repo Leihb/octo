@@ -23,10 +23,10 @@ RSpec.describe Octo::Agent, "read-timeout hint injection" do
       models: [
         {
           "type"             => "default",
-          "model"            => "abs-claude-sonnet-4-6",
-          "api_key"          => "absk-test",
-          "base_url"         => "https://api.octo.ai/v1",
-          "anthropic_format" => true
+          "model"            => "anthropic/claude-sonnet-4-6",
+          "api_key"          => "sk-or-test",
+          "base_url"         => "https://openrouter.ai/api/v1",
+          "anthropic_format" => false
         }
       ],
       permission_mode: :auto_approve

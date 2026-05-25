@@ -141,16 +141,16 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
     end
 
     context "with model: 'lite' (virtual overlay)" do
-      # Build a realistic config: current model is Opus on octo,
+      # Build a realistic config: current model is Opus on openrouter,
       # so virtual-lite should resolve to Haiku (per Providers preset).
       let(:config) do
         Octo::AgentConfig.new(
           models: [
             {
               "id" => "opus-id",
-              "model" => "abs-claude-opus-4-7",
-              "base_url" => "https://api.octo.com",
-              "api_key" => "octo-test-key",
+              "model" => "anthropic/claude-opus-4-7",
+              "base_url" => "https://openrouter.ai/api/v1",
+              "api_key" => "sk-or-test",
               "anthropic_format" => false,
               "type" => "default"
             }
@@ -162,7 +162,7 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
       it "routes the subagent through the lite model (Haiku) via overlay" do
         subagent = agent.fork_subagent(model: "lite")
         expect(subagent.instance_variable_get(:@config).model_name)
-          .to eq("abs-claude-haiku-4-5")
+          .to eq("anthropic/claude-haiku-4-5")
       end
 
       it "does NOT mutate the parent agent's current model" do
@@ -173,7 +173,7 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
 
         # Parent's raw @models hash must be unchanged — no in-place mutation.
         expect(original_opus_hash["model"]).to eq(original_model_name)
-        expect(config.model_name).to eq("abs-claude-opus-4-7")
+        expect(config.model_name).to eq("anthropic/claude-opus-4-7")
       end
 
       it "keeps the parent and subagent models hash isolated at object level" do
@@ -183,19 +183,19 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
 
         # Different hash instances (overlay produces a merged copy).
         expect(sub_hash).not_to be(parent_hash)
-        expect(sub_hash["model"]).to eq("abs-claude-haiku-4-5")
-        expect(parent_hash["model"]).to eq("abs-claude-opus-4-7")
+        expect(sub_hash["model"]).to eq("anthropic/claude-haiku-4-5")
+        expect(parent_hash["model"]).to eq("anthropic/claude-opus-4-7")
       end
 
-      it "resolves lite even when base_url is a local-debug proxy (octo-* api_key fallback)" do
+      it "falls back to current model when base_url is a local-debug proxy" do
         # Swap the config to use a local proxy base_url — the classic
-        # self-hosted debug scenario. The octo- api_key prefix should
-        # still identify this as octo and map opus → haiku.
+        # self-hosted debug scenario. Without a known provider mapping,
+        # no lite can be resolved, so the subagent inherits the primary.
         config.models.first["base_url"] = "http://localhost:3100"
 
         subagent = agent.fork_subagent(model: "lite")
         sub_config = subagent.instance_variable_get(:@config)
-        expect(sub_config.model_name).to eq("abs-claude-haiku-4-5")
+        expect(sub_config.model_name).to eq("anthropic/claude-opus-4-7")
         # base_url is preserved so the subagent still goes through the proxy.
         expect(sub_config.base_url).to eq("http://localhost:3100")
       end
@@ -209,7 +209,7 @@ RSpec.describe Octo::Agent, "#fork_subagent" do
 
         subagent = agent.fork_subagent(model: "lite")
         expect(subagent.instance_variable_get(:@config).model_name)
-          .to eq("abs-claude-opus-4-7")
+          .to eq("anthropic/claude-opus-4-7")
       end
     end
   end

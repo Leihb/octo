@@ -12,11 +12,11 @@ RSpec.describe Octo::Providers do
     end
 
     it "merges model-level override on top of provider-level defaults" do
-      # octo: provider default vision:true, but DeepSeek models override to false.
-      expect(described_class.capabilities("octo", model_name: "dsk-deepseek-v4-pro"))
-        .to eq("vision" => false)
-      expect(described_class.capabilities("octo", model_name: "abs-claude-opus-4-7"))
+      # glm: provider default vision:false, but glm-5v-turbo overrides to true.
+      expect(described_class.capabilities("glm", model_name: "glm-5v-turbo"))
         .to eq("vision" => true)
+      expect(described_class.capabilities("glm", model_name: "glm-5.1"))
+        .to eq("vision" => false)
     end
 
     it "falls back to provider-level defaults for unknown model_name" do
@@ -49,33 +49,33 @@ RSpec.describe Octo::Providers do
     end
 
     context "for providers that declare vision: true at provider level" do
-      it "returns true for octo (Claude model)" do
-        expect(described_class.supports?("octo", :vision,
-                                         model_name: "abs-claude-opus-4-7")).to be true
+      it "returns true for kimi (multimodal model)" do
+        expect(described_class.supports?("kimi", :vision,
+                                         model_name: "kimi-k2.6")).to be true
       end
 
-      it "returns true for octo without a model_name (provider-wide default)" do
-        expect(described_class.supports?("octo", :vision)).to be true
+      it "returns true for kimi without a model_name (provider-wide default)" do
+        expect(described_class.supports?("kimi", :vision)).to be true
       end
 
-      it "returns true for octoai-sea (Claude model)" do
-        expect(described_class.supports?("octoai-sea", :vision,
-                                         model_name: "abs-claude-sonnet-4-5")).to be true
+      it "returns true for openai (GPT multimodal)" do
+        expect(described_class.supports?("openai", :vision,
+                                         model_name: "gpt-5.5")).to be true
       end
     end
 
     context "with model-level overrides" do
-      it "returns false for octo + DeepSeek models (vision-less sidecar)" do
-        expect(described_class.supports?("octo", :vision,
-                                         model_name: "dsk-deepseek-v4-pro")).to be false
-        expect(described_class.supports?("octo", :vision,
-                                         model_name: "dsk-deepseek-v4-flash")).to be false
+      it "returns true for glm + vision model (override on text-only default)" do
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5v-turbo")).to be true
+        expect(described_class.supports?("glm", :vision,
+                                         model_name: "glm-5.1")).to be false
       end
 
-      it "returns false for octoai-sea + unknown model (falls back to provider default)" do
-        # octoai-sea no longer hosts DeepSeek; unknown model inherits provider-level vision=true.
-        expect(described_class.supports?("octoai-sea", :vision,
-                                         model_name: "dsk-deepseek-v4-pro")).to be true
+      it "returns false for mimo + text model (falls back to provider default)" do
+        # mimo default is text-only; unknown model inherits provider-level vision=false.
+        expect(described_class.supports?("mimo", :vision,
+                                         model_name: "unknown-model")).to be false
       end
     end
 
@@ -157,24 +157,18 @@ RSpec.describe Octo::Providers do
   describe ".resolve_provider" do
     it "prefers base_url when it matches a known preset" do
       expect(described_class.resolve_provider(
-               base_url: "https://api.octo.com", api_key: nil
-             )).to eq("octo")
+               base_url: "https://api.openai.com/v1", api_key: nil
+             )).to eq("openai")
     end
 
     it "returns the base_url match even when api_key belongs to a different family" do
       # base_url wins over api_key heuristic — users explicitly pointed there.
       expect(described_class.resolve_provider(
-               base_url: "https://api.deepseek.com", api_key: "octo-abc"
+               base_url: "https://api.deepseek.com", api_key: "sk-abc"
              )).to eq("deepseekv4")
     end
 
-    it "falls back to octo-* api_key prefix when base_url is unknown (local-debug proxy)" do
-      expect(described_class.resolve_provider(
-               base_url: "http://localhost:3100", api_key: "octo-af2a576"
-             )).to eq("octo")
-    end
-
-    it "returns nil when base_url is unknown and api_key is not a octo-* key" do
+    it "returns nil when base_url is unknown" do
       expect(described_class.resolve_provider(
                base_url: "http://localhost:9999", api_key: "sk-generic"
              )).to be_nil

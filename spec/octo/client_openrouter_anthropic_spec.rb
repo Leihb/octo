@@ -40,8 +40,8 @@ RSpec.describe Octo::Client, "OpenRouter Anthropic routing" do
     it "does not affect Bedrock-prefixed models (abs-*) which have their own path" do
       # abs-* models go through Bedrock regardless of base_url; anthropic_format?
       # must stay false per its existing contract (checked via !@use_bedrock).
-      client = described_class.new("octo-key",
-                                   base_url: "https://api.octo.com",
+      client = described_class.new("bedrock-key",
+                                   base_url: "https://api.example.com",
                                    model: "abs-claude-opus-4-7")
       expect(client.bedrock?).to be true
       expect(client.anthropic_format?).to be false

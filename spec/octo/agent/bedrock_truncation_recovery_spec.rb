@@ -20,7 +20,7 @@ RSpec.describe Octo::Agent, "Bedrock truncated tool call recovery" do
         "type"             => "default",
         "model"            => "abs-claude-sonnet-4-6",
         "api_key"          => "absk-test",
-        "base_url"         => "https://api.octo.ai/v1",
+        "base_url"         => "https://api.anthropic.com",
         "anthropic_format" => true
       }],
       permission_mode: :auto_approve

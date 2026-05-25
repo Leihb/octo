@@ -7,19 +7,19 @@
 RSpec.describe Octo::Agent, "fallback model integration" do
   # ── shared helpers ─────────────────────────────────────────────────────────
 
-  let(:primary_model)  { "abs-claude-sonnet-4-6" }
-  let(:fallback_model) { "abs-claude-sonnet-4-5" }
+  let(:primary_model)  { "anthropic/claude-sonnet-4-6" }
+  let(:fallback_model) { "anthropic/claude-haiku-4-5" }
 
-  # Config that maps to octoai provider so fallback_model_for works
+  # Config that maps to openrouter so fallback_model_for works
   let(:config) do
     Octo::AgentConfig.new(
       models: [
         {
           "type"             => "default",
           "model"            => primary_model,
-          "api_key"          => "absk-test",
-          "base_url"         => "https://api.octo.ai/v1",
-          "anthropic_format" => true
+          "api_key"          => "sk-or-test",
+          "base_url"         => "https://openrouter.ai/api/v1",
+          "anthropic_format" => false
         }
       ],
       permission_mode: :auto_approve

@@ -25,56 +25,6 @@ module Octo
     #   its default while routing Claude models through the native Anthropic
     #   endpoint (which preserves cache_control fidelity).
     PRESETS = {
-      "octo" => {
-        "name" => "Octo",
-        "base_url" => "https://api.octo.com",
-        "api" => "bedrock",
-        "default_model" => "abs-claude-sonnet-4-6",
-        "models" => [
-          "abs-claude-opus-4-7",
-          "abs-claude-opus-4-6",
-          "abs-claude-sonnet-4-6",
-          "abs-claude-sonnet-4-5",
-          "abs-claude-haiku-4-5",
-          "dsk-deepseek-v4-pro",
-          "dsk-deepseek-v4-flash",
-          "or-gemini-3-1-pro"
-        ],
-        # Provider-level default: the Claude family served here is vision-capable.
-        "capabilities" => { "vision" => true }.freeze,
-        # Model-level overrides: DeepSeek models routed through this provider
-        # are text-only; images uploaded for them must be downgraded to disk refs.
-        # Gemini 3.1 Pro keeps the provider-default vision=true (it accepts
-        # image/audio/video input natively via OpenRouter).
-        "model_capabilities" => {
-          "dsk-deepseek-v4-pro"   => { "vision" => false }.freeze,
-          "dsk-deepseek-v4-flash" => { "vision" => false }.freeze
-        }.freeze,
-        # Per-primary lite pairing: keys are "strong" primary models, values
-        # are the lite sidekick to auto-inject when that primary is the
-        # default. Lite is consumed by some subagents for cheap/fast work;
-        # weak models (haiku / v4-flash) ARE the lite tier themselves, so
-        # they're intentionally not listed here — no injection happens when
-        # the default model is already lite-class.
-        #
-        # or-gemini-3-1-pro is intentionally absent: Gemini has no lite
-        # sibling wired up (yet) on this provider; subagents using the
-        # Gemini default will just reuse it for lite work until we add one.
-        "lite_models" => {
-          "abs-claude-opus-4-7"   => "abs-claude-haiku-4-5",
-          "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
-          "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
-          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5",
-          "dsk-deepseek-v4-pro"   => "dsk-deepseek-v4-flash"
-        },
-        # Fallback chain: if a model is unavailable, try the next one in order.
-        # Keys are primary model names; values are the fallback model to use instead.
-        "fallback_models" => {
-          "abs-claude-sonnet-4-6" => "abs-claude-sonnet-4-5"
-        },
-        "website_url" => "https://www.octo.com/ai-keys"
-      }.freeze,
-
       "openrouter" => {
         "name" => "OpenRouter",
         "base_url" => "https://openrouter.ai/api/v1",
@@ -103,6 +53,16 @@ module Octo
           "anthropic/claude-sonnet-4-6" => "anthropic/claude-haiku-4-5",
           "anthropic/claude-opus-4-7"   => "anthropic/claude-haiku-4-5",
           "anthropic/claude-opus-4-6"   => "anthropic/claude-haiku-4-5",
+          "openai/gpt-5.5"              => "openai/gpt-5.4-mini",
+          "openai/gpt-5.4"              => "openai/gpt-5.4-mini"
+        },
+        # Fallback chain for degraded-endpoint scenarios. When the primary
+        # returns repeated 503/429 errors, the agent temporarily switches to
+        # the fallback model to keep sessions alive.
+        "fallback_models" => {
+          "anthropic/claude-sonnet-4-6" => "anthropic/claude-haiku-4-5",
+          "anthropic/claude-opus-4-7"   => "anthropic/claude-sonnet-4-6",
+          "anthropic/claude-opus-4-6"   => "anthropic/claude-sonnet-4-6",
           "openai/gpt-5.5"              => "openai/gpt-5.4-mini",
           "openai/gpt-5.4"              => "openai/gpt-5.4-mini"
         },
@@ -235,33 +195,6 @@ module Octo
         "default_model" => "claude-sonnet-4.6",
         "models" => ["claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4.6", "claude-haiku-4.5"],
         "website_url" => "https://console.anthropic.com/settings/keys"
-      }.freeze,
-
-      "octoai-sea" => {
-        "name" => "OctoAI(Sea)",
-        "base_url" => "https://api.octo.ai",
-        "api" => "bedrock",
-        "default_model" => "abs-claude-sonnet-4-5",
-        "models" => [
-          "abs-claude-opus-4-6",
-          "abs-claude-sonnet-4-6",
-          "abs-claude-sonnet-4-5",
-          "abs-claude-haiku-4-5"
-        ],
-        # Claude family — all vision-capable.
-        "capabilities" => { "vision" => true }.freeze,
-        # Per-primary lite pairing — see octo preset for rationale.
-        "lite_models" => {
-          "abs-claude-opus-4-6"   => "abs-claude-haiku-4-5",
-          "abs-claude-sonnet-4-6" => "abs-claude-haiku-4-5",
-          "abs-claude-sonnet-4-5" => "abs-claude-haiku-4-5"
-        },
-        # Fallback chain: if a model is unavailable, try the next one in order.
-        # Keys are primary model names; values are the fallback model to use instead.
-        "fallback_models" => {
-          "abs-claude-sonnet-4-6" => "abs-claude-sonnet-4-5"
-        },
-        "website_url" => "https://octo.ai"
       }.freeze,
 
       "mimo" => {
@@ -542,39 +475,13 @@ module Octo
         end&.first
       end
 
-      # Resolve the provider id for a model entry, trying base_url first and
-      # then falling back to an api_key hint for the octo family.
-      #
-      # Why the api_key fallback exists:
-      #   For local-debug / self-hosted proxy setups, users sometimes point
-      #   an "abs-claude-*" or "dsk-deepseek-*" model at http://localhost:XXXX
-      #   while still using a real `octo-...` api key. Pure base_url matching
-      #   would report "unknown provider" and downstream logic (lite pairing,
-      #   fallback_models, capability detection) silently degrades. Recognising
-      #   the `octo-` key prefix keeps those flows working without forcing
-      #   the user to edit base_url.
-      #
-      # Not generalised to other providers: the `sk-...` prefix is used by
-      # OpenAI, DeepSeek, Moonshot, and many others, so it can't uniquely
-      # identify a provider. We only special-case `octo-` because it's
-      # unique to us and the debug-proxy scenario is specifically ours.
+      # Resolve the provider id for a model entry by base_url.
       #
       # @param base_url [String, nil] the configured base_url
-      # @param api_key  [String, nil] the configured api_key
+      # @param api_key  [String, nil] unused, kept for API compatibility
       # @return [String, nil] provider id or nil if unresolvable
       def resolve_provider(base_url: nil, api_key: nil)
-        id = find_by_base_url(base_url)
-        return id if id
-
-        # Local-debug fallback: octo-* api keys belong to the octo
-        # family. Both "octo" and "octoai-sea" share the same key
-        # namespace and an identical model lineup/lite mapping, so picking
-        # "octo" is equivalent for downstream lookups.
-        if api_key.is_a?(String) && api_key.start_with?("octo-")
-          return "octo"
-        end
-
-        nil
+        find_by_base_url(base_url)
       end
 
       # Resolve the capabilities hash for a given provider+model.
@@ -582,7 +489,7 @@ module Octo
       # Resolution order (most specific wins):
       #   1. PRESETS[provider_id]["model_capabilities"][model_name] — per-model
       #      override, used when a single provider hosts a mix of capabilities
-      #      (e.g. octo serves both Claude [vision] and DeepSeek [text]).
+      #      (e.g. OpenRouter serves both Claude [vision] and DeepSeek [text]).
       #   2. PRESETS[provider_id]["capabilities"] — provider-wide defaults,
       #      used when the whole lineup shares the same capabilities.
       #   3. {} — no declaration; callers get the conservative default (true)

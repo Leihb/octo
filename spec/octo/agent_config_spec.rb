@@ -265,16 +265,16 @@ RSpec.describe Octo::AgentConfig do
       expect(config.current_model_supports?(:vision)).to be false
     end
 
-    it "returns true for octo + Claude model" do
+    it "returns true for OpenRouter + Claude model" do
       config = described_class.new(
-        models: [{ "api_key" => "x", "base_url" => "https://api.octo.com", "model" => "abs-claude-opus-4-7" }]
+        models: [{ "api_key" => "x", "base_url" => "https://openrouter.ai/api/v1", "model" => "anthropic/claude-opus-4-7" }]
       )
       expect(config.current_model_supports?(:vision)).to be true
     end
 
-    it "returns false for octo + DeepSeek model (model-level override)" do
+    it "returns false for DeepSeek V4 (provider-level vision:false)" do
       config = described_class.new(
-        models: [{ "api_key" => "x", "base_url" => "https://api.octo.com", "model" => "dsk-deepseek-v4-pro" }]
+        models: [{ "api_key" => "x", "base_url" => "https://api.deepseek.com", "model" => "deepseek-v4-pro" }]
       )
       expect(config.current_model_supports?(:vision)).to be false
     end
@@ -284,8 +284,8 @@ RSpec.describe Octo::AgentConfig do
       # no caching, no stale state.
       config = described_class.new(
         models: [
-          { "id" => "a", "api_key" => "x", "base_url" => "https://api.octo.com", "model" => "abs-claude-opus-4-7" },
-          { "id" => "b", "api_key" => "x", "base_url" => "https://api.octo.com", "model" => "dsk-deepseek-v4-pro" }
+          { "id" => "a", "api_key" => "x", "base_url" => "https://openrouter.ai/api/v1", "model" => "anthropic/claude-opus-4-7" },
+          { "id" => "b", "api_key" => "x", "base_url" => "https://api.minimaxi.com/v1", "model" => "MiniMax-M2.7" }
         ]
       )
 
@@ -845,13 +845,13 @@ RSpec.describe Octo::AgentConfig do
   # Lite model resolution (virtual, on-demand; no longer materialized into @models)
   # ─────────────────────────────────────────────────────────────────────────
   describe "#lite_model_config_for_current (virtual lite derivation)" do
-    context "when octoai-sea is the configured provider (base_url matches)" do
+    context "when openrouter is the configured provider (base_url matches)" do
       it "does NOT materialize lite into @models at load time" do
         with_temp_config([
           {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "model"            => "anthropic/claude-sonnet-4-6",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "default"
           }
@@ -868,9 +868,9 @@ RSpec.describe Octo::AgentConfig do
       it "derives a virtual lite config that pairs the Claude family with Haiku" do
         with_temp_config([
           {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "model"            => "anthropic/claude-sonnet-4-6",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "default"
           }
@@ -879,9 +879,9 @@ RSpec.describe Octo::AgentConfig do
           lite = config.lite_model_config_for_current
 
           expect(lite).not_to be_nil
-          expect(lite["model"]).to eq("abs-claude-haiku-4-5")
-          expect(lite["api_key"]).to eq("absk-test-key")
-          expect(lite["base_url"]).to eq("https://api.octo.ai")
+          expect(lite["model"]).to eq("anthropic/claude-haiku-4-5")
+          expect(lite["api_key"]).to eq("or-test-key")
+          expect(lite["base_url"]).to eq("https://openrouter.ai/api/v1")
           expect(lite["type"]).to eq("lite")
           expect(lite["virtual"]).to be true
         end
@@ -890,9 +890,9 @@ RSpec.describe Octo::AgentConfig do
       it "returns nil when the current model IS already a lite-class model (Haiku)" do
         with_temp_config([
           {
-            "model"            => "abs-claude-haiku-4-5",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "model"            => "anthropic/claude-haiku-4-5",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "default"
           }
@@ -905,16 +905,16 @@ RSpec.describe Octo::AgentConfig do
       it "prefers an explicit user-configured lite (type: lite) over provider derivation" do
         with_temp_config([
           {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "model"            => "anthropic/claude-sonnet-4-6",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "default"
           },
           {
             "model"            => "my-custom-lite",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "lite"
           }
@@ -928,37 +928,37 @@ RSpec.describe Octo::AgentConfig do
       end
     end
 
-    context "when octo is the configured provider (DeepSeek lite pairing)" do
-      it "pairs the DeepSeek family with V4-flash (runtime follows current model)" do
-        # Two user-facing models — one Claude, one DeepSeek — with Claude as
-        # default. Switching primary to DeepSeek should flip the derived lite
-        # from Haiku to DSK-v4-flash automatically.
+    context "when qwen is the configured provider (per-family lite pairing)" do
+      it "pairs the Qwen family with flash (runtime follows current model)" do
+        # Two user-facing models — one plus, one max — with plus as
+        # default. Switching primary to max should keep the derived lite
+        # as flash automatically (both map to flash).
         with_temp_config([
           {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "octo-test-key",
-            "base_url"         => "https://api.octo.com",
+            "model"            => "qwen3.6-plus",
+            "api_key"          => "qwen-test-key",
+            "base_url"         => "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "anthropic_format" => false,
             "type"             => "default"
           },
           {
-            "model"            => "dsk-deepseek-v4-pro",
-            "api_key"          => "octo-test-key",
-            "base_url"         => "https://api.octo.com",
+            "model"            => "qwen3.6-max",
+            "api_key"          => "qwen-test-key",
+            "base_url"         => "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "anthropic_format" => false
           }
         ]) do |config_file|
           config = described_class.load(config_file)
 
-          # Start on Claude → lite = Haiku
+          # Start on plus → lite = flash
           lite1 = config.lite_model_config_for_current
-          expect(lite1["model"]).to eq("abs-claude-haiku-4-5")
+          expect(lite1["model"]).to eq("qwen3.6-flash")
 
-          # Switch to DSK-pro → lite follows, now V4-flash
-          dsk = config.models.find { |m| m["model"] == "dsk-deepseek-v4-pro" }
-          expect(config.switch_model_by_id(dsk["id"])).to be true
+          # Switch to max → lite follows, still flash
+          maxm = config.models.find { |m| m["model"] == "qwen3.6-max" }
+          expect(config.switch_model_by_id(maxm["id"])).to be true
           lite2 = config.lite_model_config_for_current
-          expect(lite2["model"]).to eq("dsk-deepseek-v4-flash")
+          expect(lite2["model"]).to eq("qwen3.6-flash")
         end
       end
     end
@@ -985,9 +985,9 @@ RSpec.describe Octo::AgentConfig do
       it "does not leak any lite entry to disk when lite is purely virtual" do
         with_temp_config([
           {
-            "model"            => "abs-claude-sonnet-4-6",
-            "api_key"          => "absk-test-key",
-            "base_url"         => "https://api.octo.ai",
+            "model"            => "anthropic/claude-sonnet-4-6",
+            "api_key"          => "or-test-key",
+            "base_url"         => "https://openrouter.ai/api/v1",
             "anthropic_format" => false,
             "type"             => "default"
           }
@@ -1012,20 +1012,20 @@ RSpec.describe Octo::AgentConfig do
   # Providers.find_by_base_url
   # ─────────────────────────────────────────────────────────────────────────
   describe "Octo::Providers.find_by_base_url" do
-    it "returns octoai-sea for https://api.octo.ai" do
-      expect(Octo::Providers.find_by_base_url("https://api.octo.ai")).to eq("octoai-sea")
+    it "returns glm for https://open.bigmodel.cn/api/paas/v4" do
+      expect(Octo::Providers.find_by_base_url("https://open.bigmodel.cn/api/paas/v4")).to eq("glm")
     end
 
     it "is tolerant of trailing slashes" do
-      expect(Octo::Providers.find_by_base_url("https://api.octo.ai/")).to eq("octoai-sea")
+      expect(Octo::Providers.find_by_base_url("https://open.bigmodel.cn/api/paas/v4/")).to eq("glm")
     end
 
-    it "matches sub-path variants like /v1" do
-      expect(Octo::Providers.find_by_base_url("https://api.octo.ai/v1")).to eq("octoai-sea")
+    it "matches sub-path variants like /coding/paas/v4" do
+      expect(Octo::Providers.find_by_base_url("https://open.bigmodel.cn/api/coding/paas/v4")).to eq("glm")
     end
 
-    it "matches sub-path variants like /v1/" do
-      expect(Octo::Providers.find_by_base_url("https://api.octo.ai/v1/")).to eq("octoai-sea")
+    it "matches international variant https://api.z.ai/api/paas/v4" do
+      expect(Octo::Providers.find_by_base_url("https://api.z.ai/api/paas/v4")).to eq("glm")
     end
 
     it "returns nil for unknown base URLs" do
@@ -1041,26 +1041,25 @@ RSpec.describe Octo::AgentConfig do
   # Providers.lite_model (per-family lookup)
   # ─────────────────────────────────────────────────────────────────────────
   describe "Octo::Providers.lite_model" do
-    context "octoai-sea (Claude-only lite_models table)" do
+    context "openrouter (per-family lite_models table)" do
       it "returns Haiku for Claude-family primaries" do
-        expect(Octo::Providers.lite_model("octoai-sea", "abs-claude-sonnet-4-6"))
-          .to eq("abs-claude-haiku-4-5")
-        expect(Octo::Providers.lite_model("octoai-sea", "abs-claude-opus-4-6"))
-          .to eq("abs-claude-haiku-4-5")
+        expect(Octo::Providers.lite_model("openrouter", "anthropic/claude-sonnet-4-6"))
+          .to eq("anthropic/claude-haiku-4-5")
+        expect(Octo::Providers.lite_model("openrouter", "anthropic/claude-opus-4-6"))
+          .to eq("anthropic/claude-haiku-4-5")
       end
 
       it "returns nil for lite-class primaries (Haiku)" do
-        expect(Octo::Providers.lite_model("octoai-sea", "abs-claude-haiku-4-5")).to be_nil
+        expect(Octo::Providers.lite_model("openrouter", "anthropic/claude-haiku-4-5")).to be_nil
       end
 
-      it "returns nil for models not in the lite_models table (e.g. DeepSeek, not hosted)" do
-        # octoai-sea only hosts Claude; DeepSeek models are not mapped.
-        expect(Octo::Providers.lite_model("octoai-sea", "dsk-deepseek-v4-pro")).to be_nil
+      it "returns nil for models not in the lite_models table" do
+        expect(Octo::Providers.lite_model("openrouter", "openai/gpt-5.4-nano")).to be_nil
       end
 
       it "returns nil when called without a primary on a per-family provider" do
         # Per-family providers require context — no sensible global default.
-        expect(Octo::Providers.lite_model("octoai-sea")).to be_nil
+        expect(Octo::Providers.lite_model("openrouter")).to be_nil
       end
     end
 
