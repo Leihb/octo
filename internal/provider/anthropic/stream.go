@@ -11,15 +11,28 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Leihb/octo/internal/agent"
 	"github.com/Leihb/octo/internal/provider"
 )
+
+// blockAccumulator holds in-progress state for a single content block while
+// the SSE stream is open. Text blocks accumulate their text delta-by-delta;
+// tool_use blocks accumulate input_json_delta fragments that are JSON-parsed
+// once the stream for that block closes (content_block_stop).
+type blockAccumulator struct {
+	blockType string
+	text      strings.Builder
+	id        string
+	name      string
+	inputJSON strings.Builder
+}
 
 // SendStream implements provider.StreamingProvider against Anthropic's
 // Messages API with `stream: true`.
 //
 // Each text delta (content_block_delta of type text_delta) is forwarded to
-// onChunk synchronously. The aggregated Content, Model, StopReason, and
-// token usage are returned in the final Response.
+// onChunk synchronously. The aggregated Content, Blocks, Model, StopReason,
+// and token usage are returned in the final Response.
 //
 // Cancellation is via ctx; no HTTP-level timeout is set, because streaming
 // responses can legitimately run for minutes.
@@ -31,12 +44,18 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 		return provider.Response{}, errors.New("anthropic: at least one message is required")
 	}
 
+	msgs, err := toAPIMessages(req.Messages)
+	if err != nil {
+		return provider.Response{}, fmt.Errorf("anthropic: serialize messages: %w", err)
+	}
+
 	body := apiRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
 		System:    req.SystemPrompt,
-		Messages:  toAPIMessages(req.Messages),
+		Messages:  msgs,
 		Stream:    true,
+		Tools:     toAPITools(req.Tools),
 	}
 	if body.MaxTokens <= 0 {
 		body.MaxTokens = DefaultMaxTokens
@@ -79,8 +98,10 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 	}
 
 	var (
-		contentB strings.Builder
-		result   provider.Response
+		result     provider.Response
+		accByIndex = map[int]*blockAccumulator{}
+		// ordered list of block indices to preserve emission order
+		blockOrder []int
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -91,9 +112,7 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		// SSE frames: "data: <json>" lines, separated by blank lines, with
-		// optional "event: <type>" markers we ignore (the JSON payload
-		// always carries its own `type` field).
+		// SSE frames: "data: <json>" lines, separated by blank lines.
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
@@ -114,13 +133,40 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 				result.InputTokens = ev.Message.Usage.InputTokens
 				result.OutputTokens = ev.Message.Usage.OutputTokens
 			}
+
+		case "content_block_start":
+			acc := &blockAccumulator{}
+			if ev.ContentBlock != nil {
+				acc.blockType = ev.ContentBlock.Type
+				acc.id = ev.ContentBlock.ID
+				acc.name = ev.ContentBlock.Name
+			}
+			accByIndex[ev.Index] = acc
+			blockOrder = append(blockOrder, ev.Index)
+
 		case "content_block_delta":
-			if ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
-				contentB.WriteString(ev.Delta.Text)
-				if onChunk != nil {
+			acc, ok := accByIndex[ev.Index]
+			if !ok {
+				// No content_block_start for this index — auto-create a text
+				// accumulator so we don't lose text deltas from providers that
+				// omit the start event.
+				acc = &blockAccumulator{blockType: "text"}
+				accByIndex[ev.Index] = acc
+				blockOrder = append(blockOrder, ev.Index)
+			}
+			if ev.Delta == nil {
+				break
+			}
+			switch ev.Delta.Type {
+			case "text_delta":
+				acc.text.WriteString(ev.Delta.Text)
+				if onChunk != nil && ev.Delta.Text != "" {
 					onChunk(ev.Delta.Text)
 				}
+			case "input_json_delta":
+				acc.inputJSON.WriteString(ev.Delta.PartialJSON)
 			}
+
 		case "message_delta":
 			if ev.Delta != nil && ev.Delta.StopReason != "" {
 				result.StopReason = ev.Delta.StopReason
@@ -130,9 +176,8 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 			if ev.Usage != nil {
 				result.OutputTokens = ev.Usage.OutputTokens
 			}
+
 		case "error":
-			// Server-side errors mid-stream are surfaced as `event: error`.
-			// The payload reuses apiError shape.
 			var apiErr apiError
 			_ = json.Unmarshal([]byte(data), &apiErr)
 			return result, fmt.Errorf("anthropic: stream error: %s", apiErr.Error.Message)
@@ -142,7 +187,30 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 		return result, fmt.Errorf("anthropic: stream read: %w", err)
 	}
 
-	result.Content = contentB.String()
+	// Build the final block list in order.
+	var textB strings.Builder
+	blocks := make([]agent.ContentBlock, 0, len(blockOrder))
+	for _, idx := range blockOrder {
+		acc, ok := accByIndex[idx]
+		if !ok {
+			continue
+		}
+		switch acc.blockType {
+		case "text":
+			t := acc.text.String()
+			textB.WriteString(t)
+			blocks = append(blocks, agent.NewTextBlock(t))
+		case "tool_use":
+			var input map[string]any
+			if s := acc.inputJSON.String(); s != "" {
+				_ = json.Unmarshal([]byte(s), &input)
+			}
+			blocks = append(blocks, agent.NewToolUseBlock(acc.id, acc.name, input))
+		}
+	}
+
+	result.Content = textB.String()
+	result.Blocks = blocks
 	return result, nil
 }
 

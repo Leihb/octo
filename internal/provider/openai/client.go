@@ -72,10 +72,16 @@ func (c *Client) Send(ctx context.Context, req provider.Request) (provider.Respo
 		return provider.Response{}, errors.New("openai: at least one message is required")
 	}
 
+	msgs, err := toAPIMessages(req.SystemPrompt, req.Messages)
+	if err != nil {
+		return provider.Response{}, fmt.Errorf("openai: serialize messages: %w", err)
+	}
+
 	body := apiRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
-		Messages:  toAPIMessages(req.SystemPrompt, req.Messages),
+		Messages:  msgs,
+		Tools:     toAPITools(req.Tools),
 	}
 	if body.MaxTokens <= 0 {
 		body.MaxTokens = DefaultMaxTokens
@@ -130,10 +136,31 @@ func (c *Client) Send(ctx context.Context, req provider.Request) (provider.Respo
 	}
 	first := apiResp.Choices[0]
 
+	// Convert tool calls to agent.ContentBlock.
+	var blocks []agent.ContentBlock
+	var stopReason = first.FinishReason
+	if len(first.Message.ToolCalls) > 0 {
+		for _, tc := range first.Message.ToolCalls {
+			var input map[string]any
+			if tc.Function.Arguments != "" {
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+			}
+			blocks = append(blocks, agent.NewToolUseBlock(tc.ID, tc.Function.Name, input))
+		}
+		// Normalize finish_reason to Anthropic's naming.
+		if stopReason == "tool_calls" {
+			stopReason = "tool_use"
+		}
+	}
+	if first.Message.Content != "" {
+		blocks = append([]agent.ContentBlock{agent.NewTextBlock(first.Message.Content)}, blocks...)
+	}
+
 	return provider.Response{
 		Content:      first.Message.Content,
+		Blocks:       blocks,
 		Model:        apiResp.Model,
-		StopReason:   first.FinishReason,
+		StopReason:   stopReason,
 		InputTokens:  apiResp.Usage.PromptTokens,
 		OutputTokens: apiResp.Usage.CompletionTokens,
 	}, nil
@@ -149,14 +176,33 @@ func (c *Client) endpointURL() string {
 	return strings.TrimRight(base, "/") + ChatCompletionsPath
 }
 
+// toAPITools converts []agent.ToolDefinition to []apiTool (function format).
+func toAPITools(defs []agent.ToolDefinition) []apiTool {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]apiTool, len(defs))
+	for i, d := range defs {
+		out[i] = apiTool{
+			Type: "function",
+			Function: apiFunction{
+				Name:        d.Name,
+				Description: d.Description,
+				Parameters:  d.Parameters,
+			},
+		}
+	}
+	return out
+}
+
 // toAPIMessages converts agent.Message slice into the OpenAI wire format.
 //
 // OpenAI carries the system prompt as the FIRST element of the messages
-// array with role:"system" — the opposite direction from Anthropic, which
-// uses a separate top-level field. If a non-empty systemPrompt is passed we
-// prepend it; any role:"system" entries already in `in` are dropped so the
-// agent's SystemPrompt is the single source of truth.
-func toAPIMessages(systemPrompt string, in []agent.Message) []apiMessage {
+// array with role:"system". Tool result messages in agent History have
+// role=user + Blocks containing tool_result blocks — these are exploded into
+// individual role="tool" messages (one per result) because that's what the
+// OpenAI protocol expects.
+func toAPIMessages(systemPrompt string, in []agent.Message) ([]apiMessage, error) {
 	out := make([]apiMessage, 0, len(in)+1)
 	if strings.TrimSpace(systemPrompt) != "" {
 		out = append(out, apiMessage{Role: "system", Content: systemPrompt})
@@ -165,7 +211,58 @@ func toAPIMessages(systemPrompt string, in []agent.Message) []apiMessage {
 		if m.Role == agent.RoleSystem {
 			continue
 		}
+
+		// Assistant message with tool calls.
+		if m.Role == agent.RoleAssistant && len(m.Blocks) > 0 {
+			msg := apiMessage{Role: "assistant"}
+			for _, b := range m.Blocks {
+				switch b.Type {
+				case "text":
+					msg.Content = b.Text
+				case "tool_use":
+					msg.ToolCalls = append(msg.ToolCalls, apiToolCall{
+						ID:   b.ID,
+						Type: "function",
+						Function: apiToolCallFunction{
+							Name:      b.Name,
+							Arguments: marshalInput(b.Input),
+						},
+					})
+				}
+			}
+			out = append(out, msg)
+			continue
+		}
+
+		// User message with tool results — explode into individual role="tool" messages.
+		if m.Role == agent.RoleUser && len(m.Blocks) > 0 {
+			for _, b := range m.Blocks {
+				if b.Type == "tool_result" {
+					out = append(out, apiMessage{
+						Role:       "tool",
+						Content:    b.Result,
+						ToolCallID: b.ToolUseID,
+					})
+				}
+			}
+			continue
+		}
+
+		// Plain text message.
 		out = append(out, apiMessage{Role: string(m.Role), Content: m.Content})
 	}
-	return out
+	return out, nil
+}
+
+// marshalInput encodes a tool input map back to a compact JSON string.
+// Returns "{}" on nil/empty input so the wire value is always valid JSON.
+func marshalInput(input map[string]any) string {
+	if len(input) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }

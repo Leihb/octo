@@ -4,25 +4,35 @@
 // API reference: https://docs.anthropic.com/en/api/messages
 package anthropic
 
+import "encoding/json"
+
+// apiTool describes one tool the model may invoke, in the Anthropic wire format.
+// Note: Anthropic uses "input_schema" where the agent layer uses "parameters".
+type apiTool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
 // apiRequest is the wire-level JSON body of POST /v1/messages.
-//
-// Tool definitions and request metadata arrive in later milestones.
 type apiRequest struct {
 	Model     string       `json:"model"`
 	MaxTokens int          `json:"max_tokens"`
 	System    string       `json:"system,omitempty"`
 	Messages  []apiMessage `json:"messages"`
 	Stream    bool         `json:"stream,omitempty"`
+	Tools     []apiTool    `json:"tools,omitempty"`
 }
 
 // apiMessage is one element of apiRequest.Messages.
 //
-// Anthropic accepts either a plain string Content or a slice of content blocks
-// (text, image, tool_use, tool_result). M1.2 always sends strings; the
-// adapter converts agent.Message → apiMessage one-to-one.
+// Anthropic accepts Content either as a plain string or as a slice of content
+// blocks (text, tool_use, tool_result). We use json.RawMessage to handle both
+// shapes when marshalling outgoing messages and when parsing is not needed
+// (we control what we write).
 type apiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
 }
 
 // apiResponse is the wire-level JSON body of a successful 200 response.
@@ -36,12 +46,15 @@ type apiResponse struct {
 	Usage      apiUsageBlock     `json:"usage"`
 }
 
-// apiContentBlock is a single element of apiResponse.Content. M1.2 only
-// reads text blocks; tool_use blocks are returned in later milestones once
-// the tool layer can dispatch them.
+// apiContentBlock is a single element of apiResponse.Content.
+// For type=="text" only Text is populated; for type=="tool_use" ID, Name, and
+// Input are populated.
 type apiContentBlock struct {
-	Type string `json:"type"`           // "text" or "tool_use" in M2+
-	Text string `json:"text,omitempty"` // populated when Type == "text"
+	Type  string         `json:"type"`
+	Text  string         `json:"text,omitempty"`
+	ID    string         `json:"id,omitempty"`   // tool_use
+	Name  string         `json:"name,omitempty"` // tool_use
+	Input map[string]any `json:"input,omitempty"`
 }
 
 // apiUsageBlock is the token-count block Anthropic returns on every message.
@@ -66,16 +79,23 @@ type apiError struct {
 // content_block_stop, message_delta, message_stop, ping, and error events.
 // We only act on a subset; the rest is ignored.
 type streamEvent struct {
-	Type    string         `json:"type"`
-	Index   int            `json:"index,omitempty"`   // content_block_*
-	Message *streamMessage `json:"message,omitempty"` // message_start
-	Delta   *streamDelta   `json:"delta,omitempty"`   // content_block_delta, message_delta
-	Usage   *apiUsageBlock `json:"usage,omitempty"`   // message_delta
+	Type         string              `json:"type"`
+	Index        int                 `json:"index,omitempty"`         // content_block_*
+	Message      *streamMessage      `json:"message,omitempty"`       // message_start
+	Delta        *streamDelta        `json:"delta,omitempty"`         // content_block_delta, message_delta
+	Usage        *apiUsageBlock      `json:"usage,omitempty"`         // message_delta
+	ContentBlock *streamContentBlock `json:"content_block,omitempty"` // content_block_start
+}
+
+// streamContentBlock is the block metadata emitted with content_block_start.
+// For text blocks only Type is set; for tool_use blocks ID and Name are also set.
+type streamContentBlock struct {
+	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // streamMessage is the abridged message snapshot inside a message_start event.
-// Only fields we currently read are kept; the rest of the JSON is allowed
-// to flow past untouched.
 type streamMessage struct {
 	ID    string        `json:"id,omitempty"`
 	Model string        `json:"model,omitempty"`
@@ -84,10 +104,12 @@ type streamMessage struct {
 
 // streamDelta is the per-delta payload inside content_block_delta and
 // message_delta events.
-//   - content_block_delta: Type=="text_delta", Text holds the new bytes
-//   - message_delta:        StopReason set when the model stops
+//   - content_block_delta/text_delta:       Type=="text_delta",       Text holds the new bytes
+//   - content_block_delta/input_json_delta: Type=="input_json_delta", PartialJSON accumulates tool input
+//   - message_delta:                        StopReason set when the model stops
 type streamDelta struct {
-	Type       string `json:"type,omitempty"`
-	Text       string `json:"text,omitempty"`
-	StopReason string `json:"stop_reason,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }

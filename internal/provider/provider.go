@@ -20,20 +20,31 @@ import (
 // SystemPrompt is carried out of band rather than as a Message because
 // Anthropic's API treats it as a top-level field; OpenAI providers convert
 // it back into a leading role:"system" message in their adapter.
+//
+// Tools, when non-empty, declares the tools the model may invoke. Providers
+// that don't support tool calling should ignore this field (the model will
+// simply never emit tool_use blocks).
 type Request struct {
 	Model        string
 	SystemPrompt string
 	Messages     []agent.Message
 	MaxTokens    int
+	Tools        []agent.ToolDefinition
 }
 
-// Response is the assistant reply produced by Send. Content is plain text in
-// M1.2 — when M2 adds tool calls the type expands to carry a slice of content
-// blocks, with Content remaining as a convenience join for the text portion.
+// Response is the assistant reply produced by Send.
+//
+// Content is the concatenated text from all text blocks — a convenience join
+// for callers that only care about the prose portion of the reply.
+//
+// Blocks holds the full list of content blocks in the order the model emitted
+// them. This includes both text and tool_use blocks; callers that drive an
+// agentic loop should inspect Blocks to find tool_use blocks and dispatch them.
 type Response struct {
 	Content      string
-	Model        string // echoed by the API; useful when "claude-3-5-sonnet-latest" resolves to a dated name
-	StopReason   string // e.g. "end_turn", "max_tokens", "stop_sequence"
+	Blocks       []agent.ContentBlock // full content-block list (text + tool_use)
+	Model        string               // echoed by the API; useful when "claude-3-5-sonnet-latest" resolves to a dated name
+	StopReason   string               // "end_turn" | "tool_use" | "max_tokens" | "stop_sequence"
 	InputTokens  int
 	OutputTokens int
 }

@@ -8,28 +8,51 @@
 // pointing Client.BaseURL at the alternative host.
 package openai
 
+// apiFunction describes the callable function part of a tool.
+type apiFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
+// apiTool wraps an apiFunction with a type discriminator (always "function").
+type apiTool struct {
+	Type     string      `json:"type"` // "function"
+	Function apiFunction `json:"function"`
+}
+
 // apiRequest is the wire-level JSON body of POST /v1/chat/completions.
-//
-// Only the fields M2 needs are wired up. Tool calls, response_format, and
-// reasoning_effort arrive in later milestones. `stream_options` is
-// deliberately omitted — OpenAI itself accepts it (to request a final
-// `usage` chunk) but third-party clones diverge in support, and we don't
-// want to gate compatibility on a non-essential field.
 type apiRequest struct {
 	Model     string       `json:"model"`
 	Messages  []apiMessage `json:"messages"`
 	MaxTokens int          `json:"max_tokens,omitempty"`
 	Stream    bool         `json:"stream,omitempty"`
+	Tools     []apiTool    `json:"tools,omitempty"`
 }
 
 // apiMessage is one element of apiRequest.Messages.
 //
-// OpenAI accepts Content either as a plain string or as an array of content
-// parts (for vision). M2 always sends strings; image attachments arrive in
-// a later milestone alongside the tool-use work.
+// For plain turns Content is a string. For assistant turns with tool calls
+// ToolCalls is populated and Content may be empty. For tool result turns
+// Role is "tool" and ToolCallID identifies which call is being answered.
 type apiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string        `json:"role"`
+	Content    string        `json:"content,omitempty"`
+	ToolCalls  []apiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string        `json:"tool_call_id,omitempty"`
+}
+
+// apiToolCall is one element of apiMessage.ToolCalls (assistant turns).
+type apiToolCall struct {
+	ID       string              `json:"id"`
+	Type     string              `json:"type"` // "function"
+	Function apiToolCallFunction `json:"function"`
+}
+
+// apiToolCallFunction carries the name and JSON-encoded arguments.
+type apiToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string, needs json.Unmarshal to a map
 }
 
 // apiResponse is the wire-level JSON body of a successful 200 response.
@@ -41,7 +64,7 @@ type apiResponse struct {
 	Usage   apiUsage    `json:"usage"`
 }
 
-// apiChoice is one element of apiResponse.Choices. M2 always reads the first.
+// apiChoice is one element of apiResponse.Choices.
 type apiChoice struct {
 	Index        int        `json:"index"`
 	Message      apiMessage `json:"message"`
@@ -91,8 +114,25 @@ type streamChoice struct {
 }
 
 // streamDelta carries the incremental fields of an assistant message.
-// Only `content` is consumed in M2; tool_calls land in a later milestone.
+// ToolCalls carries incremental tool call fragments (index-keyed).
 type streamDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string                `json:"role,omitempty"`
+	Content   string                `json:"content,omitempty"`
+	ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
+}
+
+// streamToolCallDelta is one incremental fragment of a tool call in a stream
+// chunk. Fragments for the same call share the same Index; ID and Type are
+// only present in the first fragment.
+type streamToolCallDelta struct {
+	Index    int                 `json:"index"`
+	ID       string              `json:"id,omitempty"`
+	Type     string              `json:"type,omitempty"` // "function"
+	Function streamFunctionDelta `json:"function"`
+}
+
+// streamFunctionDelta carries incremental name and arguments fragments.
+type streamFunctionDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }

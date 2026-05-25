@@ -11,15 +11,23 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Leihb/octo/internal/agent"
 	"github.com/Leihb/octo/internal/provider"
 )
+
+// toolCallState accumulates streaming fragments for one tool call.
+type toolCallState struct {
+	id   string
+	name string
+	args strings.Builder
+}
 
 // SendStream implements provider.StreamingProvider against OpenAI's
 // Chat Completions API with `stream: true`.
 //
 // Each non-empty content delta is forwarded to onChunk synchronously. The
-// aggregated Content, Model, and FinishReason are returned in the final
-// Response. InputTokens / OutputTokens are typically zero on streaming
+// aggregated Content, Blocks, Model, and FinishReason are returned in the
+// final Response. InputTokens / OutputTokens are typically zero on streaming
 // responses because we don't send `stream_options.include_usage=true` —
 // some third-party OpenAI-compatible servers reject it, and the cost of
 // missing usage on a single turn is much smaller than losing compatibility.
@@ -31,11 +39,17 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 		return provider.Response{}, errors.New("openai: at least one message is required")
 	}
 
+	msgs, err := toAPIMessages(req.SystemPrompt, req.Messages)
+	if err != nil {
+		return provider.Response{}, fmt.Errorf("openai: serialize messages: %w", err)
+	}
+
 	body := apiRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
-		Messages:  toAPIMessages(req.SystemPrompt, req.Messages),
+		Messages:  msgs,
 		Stream:    true,
+		Tools:     toAPITools(req.Tools),
 	}
 	if body.MaxTokens <= 0 {
 		body.MaxTokens = DefaultMaxTokens
@@ -73,8 +87,10 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 	}
 
 	var (
-		contentB strings.Builder
-		result   provider.Response
+		contentB   strings.Builder
+		result     provider.Response
+		toolStates = map[int]*toolCallState{} // keyed by tool call index
+		toolOrder  []int                      // preserve order
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -117,8 +133,28 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 				onChunk(choice.Delta.Content)
 			}
 		}
+		// Accumulate tool call fragments.
+		for _, tc := range choice.Delta.ToolCalls {
+			st, exists := toolStates[tc.Index]
+			if !exists {
+				st = &toolCallState{}
+				toolStates[tc.Index] = st
+				toolOrder = append(toolOrder, tc.Index)
+			}
+			if tc.ID != "" {
+				st.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				st.name = tc.Function.Name
+			}
+			st.args.WriteString(tc.Function.Arguments)
+		}
 		if choice.FinishReason != "" {
-			result.StopReason = choice.FinishReason
+			stopReason := choice.FinishReason
+			if stopReason == "tool_calls" {
+				stopReason = "tool_use"
+			}
+			result.StopReason = stopReason
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -126,6 +162,24 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, onChunk f
 	}
 
 	result.Content = contentB.String()
+
+	// Build final block list: text first (if any), then tool_use blocks.
+	var blocks []agent.ContentBlock
+	if result.Content != "" {
+		blocks = append(blocks, agent.NewTextBlock(result.Content))
+	}
+	for _, idx := range toolOrder {
+		st := toolStates[idx]
+		var input map[string]any
+		if s := st.args.String(); s != "" {
+			_ = json.Unmarshal([]byte(s), &input)
+		}
+		blocks = append(blocks, agent.NewToolUseBlock(st.id, st.name, input))
+	}
+	if len(blocks) > 0 {
+		result.Blocks = blocks
+	}
+
 	return result, nil
 }
 

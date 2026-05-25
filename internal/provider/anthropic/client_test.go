@@ -49,8 +49,8 @@ func TestSend_Success(t *testing.T) {
 		if len(req.Messages) != 1 {
 			t.Fatalf("messages len = %d, want 1", len(req.Messages))
 		}
-		if req.Messages[0].Role != "user" || req.Messages[0].Content != "hello" {
-			t.Errorf("first message = %+v, want {user, hello}", req.Messages[0])
+		if req.Messages[0].Role != "user" || string(req.Messages[0].Content) != `"hello"` {
+			t.Errorf("first message = %+v, want {user, \"hello\"}", req.Messages[0])
 		}
 
 		// Response

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // Sender is the minimal slice of provider.Provider the Agent depends on:
@@ -37,12 +38,46 @@ type StreamingSender interface {
 	) (Reply, error)
 }
 
+// ToolSender extends Sender with a tool-aware variant that carries tool
+// definitions alongside the messages. Implementations return the full
+// content-block list (including tool_use blocks) in Reply.Blocks.
+type ToolSender interface {
+	Sender
+	SendMessagesWithTools(
+		ctx context.Context,
+		model, system string,
+		messages []Message,
+		maxTokens int,
+		tools []ToolDefinition,
+	) (Reply, error)
+}
+
+// ToolStreamingSender extends ToolSender and StreamingSender with a streaming
+// tool-aware variant. Implementations stream text deltas via onChunk and
+// accumulate tool_use blocks; the final Reply carries Blocks for dispatch.
+type ToolStreamingSender interface {
+	ToolSender
+	StreamMessagesWithTools(
+		ctx context.Context,
+		model, system string,
+		messages []Message,
+		maxTokens int,
+		tools []ToolDefinition,
+		onChunk func(textDelta string),
+	) (Reply, error)
+}
+
 // Reply is the agent-level view of a provider response. It deliberately
 // mirrors provider.Response field-for-field (same names, same types) but
 // lives in this package so users of the agent API don't have to import
 // provider.
+//
+// Blocks is populated when the provider returns content blocks — in
+// particular when stop_reason=="tool_use", Blocks will contain the
+// tool_use blocks that the agentic loop should dispatch.
 type Reply struct {
 	Content      string
+	Blocks       []ContentBlock
 	Model        string
 	StopReason   string
 	InputTokens  int
@@ -159,6 +194,202 @@ func (a *Agent) TurnStream(
 	a.sessionInputTokens += reply.InputTokens
 	a.sessionOutputTokens += reply.OutputTokens
 	return reply, nil
+}
+
+// maxToolIterations is the safety cap on the agentic loop. If the model
+// requests more tool calls than this in a single Run, we bail out with an
+// error rather than looping forever.
+const maxToolIterations = 20
+
+// Run is the agentic loop. It appends the user message to history then
+// repeatedly calls the provider until the model reaches end_turn (no more
+// tool calls) or the iteration cap is hit.
+//
+// If tools is nil or executor is nil, Run is equivalent to Turn (single-turn,
+// no tool dispatch).
+func (a *Agent) Run(ctx context.Context, userInput string, tools []ToolDefinition, executor ToolExecutor) (Reply, error) {
+	if a.Sender == nil {
+		return Reply{}, fmt.Errorf("agent: no Sender configured")
+	}
+	if a.Model == "" {
+		return Reply{}, fmt.Errorf("agent: Model is required")
+	}
+	if userInput == "" {
+		return Reply{}, fmt.Errorf("agent: userInput must be non-empty")
+	}
+
+	// No tools → plain Turn.
+	if len(tools) == 0 || executor == nil {
+		return a.Turn(ctx, userInput)
+	}
+
+	ts, ok := a.Sender.(ToolSender)
+	if !ok {
+		// Sender doesn't support tools; fall back to Turn.
+		return a.Turn(ctx, userInput)
+	}
+
+	a.History.Append(NewUserMessage(userInput))
+
+	for i := 0; i < maxToolIterations; i++ {
+		reply, err := ts.SendMessagesWithTools(ctx, a.Model, a.System, a.History.Snapshot(), a.MaxTokens, tools)
+		if err != nil {
+			if i == 0 {
+				a.History.popLast()
+			}
+			return Reply{}, fmt.Errorf("agent: run[%d]: %w", i, err)
+		}
+		a.sessionInputTokens += reply.InputTokens
+		a.sessionOutputTokens += reply.OutputTokens
+
+		if reply.StopReason == "tool_use" {
+			// Append assistant message with tool_use blocks, then dispatch.
+			a.History.Append(NewToolUseMessage(reply.Blocks))
+
+			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks)
+			if err != nil {
+				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
+			}
+			a.History.Append(NewToolResultMessage(resultBlocks))
+			continue
+		}
+
+		// end_turn (or other stop reason): done.
+		// Use text content from reply; if Content is empty but Blocks has text, reconstruct.
+		content := reply.Content
+		if content == "" {
+			content = textFromBlocks(reply.Blocks)
+		}
+		a.History.Append(NewAssistantMessage(content))
+		reply.Content = content
+		return reply, nil
+	}
+
+	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
+}
+
+// RunStream is the streaming agentic loop. Behaves like Run but streams text
+// deltas to onChunk as they arrive from the provider.
+//
+// If tools is nil or executor is nil, RunStream is equivalent to TurnStream.
+func (a *Agent) RunStream(
+	ctx context.Context,
+	userInput string,
+	tools []ToolDefinition,
+	executor ToolExecutor,
+	onChunk func(string),
+) (Reply, error) {
+	if a.Sender == nil {
+		return Reply{}, fmt.Errorf("agent: no Sender configured")
+	}
+	if a.Model == "" {
+		return Reply{}, fmt.Errorf("agent: Model is required")
+	}
+	if userInput == "" {
+		return Reply{}, fmt.Errorf("agent: userInput must be non-empty")
+	}
+
+	// No tools → plain TurnStream.
+	if len(tools) == 0 || executor == nil {
+		return a.TurnStream(ctx, userInput, onChunk)
+	}
+
+	// Try ToolStreamingSender first, then fall back to ToolSender (buffered).
+	if tss, ok := a.Sender.(ToolStreamingSender); ok {
+		return a.runStreamLoop(ctx, userInput, tools, executor, onChunk,
+			func(ctx context.Context, msgs []Message) (Reply, error) {
+				return tss.StreamMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools, onChunk)
+			})
+	}
+	if ts, ok := a.Sender.(ToolSender); ok {
+		return a.runStreamLoop(ctx, userInput, tools, executor, onChunk,
+			func(ctx context.Context, msgs []Message) (Reply, error) {
+				reply, err := ts.SendMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools)
+				if err == nil && onChunk != nil && reply.Content != "" {
+					onChunk(reply.Content)
+				}
+				return reply, err
+			})
+	}
+
+	// Neither interface available → plain TurnStream.
+	return a.TurnStream(ctx, userInput, onChunk)
+}
+
+// runStreamLoop is the shared inner loop for RunStream. The send function
+// encapsulates the provider call (streaming or buffered).
+func (a *Agent) runStreamLoop(
+	ctx context.Context,
+	userInput string,
+	tools []ToolDefinition,
+	executor ToolExecutor,
+	_ func(string), // onChunk already closed over by send
+	send func(ctx context.Context, msgs []Message) (Reply, error),
+) (Reply, error) {
+	a.History.Append(NewUserMessage(userInput))
+
+	for i := 0; i < maxToolIterations; i++ {
+		reply, err := send(ctx, a.History.Snapshot())
+		if err != nil {
+			if i == 0 {
+				a.History.popLast()
+			}
+			return Reply{}, fmt.Errorf("agent: run-stream[%d]: %w", i, err)
+		}
+		a.sessionInputTokens += reply.InputTokens
+		a.sessionOutputTokens += reply.OutputTokens
+
+		if reply.StopReason == "tool_use" {
+			a.History.Append(NewToolUseMessage(reply.Blocks))
+
+			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks)
+			if err != nil {
+				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
+			}
+			a.History.Append(NewToolResultMessage(resultBlocks))
+			continue
+		}
+
+		content := reply.Content
+		if content == "" {
+			content = textFromBlocks(reply.Blocks)
+		}
+		a.History.Append(NewAssistantMessage(content))
+		reply.Content = content
+		return reply, nil
+	}
+
+	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
+}
+
+// dispatchTools calls executor.Execute for every tool_use block in blocks,
+// returning the corresponding tool_result blocks. Errors from Execute are
+// returned as tool_result blocks with IsError=true so the model can recover.
+func dispatchTools(ctx context.Context, executor ToolExecutor, blocks []ContentBlock) ([]ContentBlock, error) {
+	var results []ContentBlock
+	for _, b := range blocks {
+		if b.Type != "tool_use" {
+			continue
+		}
+		output, execErr := executor.Execute(ctx, b.Name, b.Input)
+		if execErr != nil {
+			results = append(results, NewToolResultBlock(b.ID, execErr.Error(), true))
+		} else {
+			results = append(results, NewToolResultBlock(b.ID, output, false))
+		}
+	}
+	return results, nil
+}
+
+// textFromBlocks joins text from all "text" content blocks.
+func textFromBlocks(blocks []ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Type == "text" {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
 }
 
 // SessionTokens returns the cumulative input and output token counts for all

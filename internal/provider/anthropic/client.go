@@ -78,11 +78,17 @@ func (c *Client) Send(ctx context.Context, req provider.Request) (provider.Respo
 		return provider.Response{}, errors.New("anthropic: at least one message is required")
 	}
 
+	msgs, err := toAPIMessages(req.Messages)
+	if err != nil {
+		return provider.Response{}, fmt.Errorf("anthropic: serialize messages: %w", err)
+	}
+
 	body := apiRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
 		System:    req.SystemPrompt,
-		Messages:  toAPIMessages(req.Messages),
+		Messages:  msgs,
+		Tools:     toAPITools(req.Tools),
 	}
 	if body.MaxTokens <= 0 {
 		body.MaxTokens = DefaultMaxTokens
@@ -137,8 +143,10 @@ func (c *Client) Send(ctx context.Context, req provider.Request) (provider.Respo
 		return provider.Response{}, fmt.Errorf("anthropic: decode response: %w", err)
 	}
 
+	blocks := fromAPIContentBlocks(apiResp.Content)
 	return provider.Response{
 		Content:      joinTextBlocks(apiResp.Content),
+		Blocks:       blocks,
 		Model:        apiResp.Model,
 		StopReason:   apiResp.StopReason,
 		InputTokens:  apiResp.Usage.InputTokens,
@@ -156,24 +164,113 @@ func (c *Client) endpointURL() string {
 	return strings.TrimRight(base, "/") + MessagesPath
 }
 
+// toAPITools converts []agent.ToolDefinition to []apiTool.
+// Anthropic uses "input_schema" where the agent layer uses "parameters".
+func toAPITools(defs []agent.ToolDefinition) []apiTool {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]apiTool, len(defs))
+	for i, d := range defs {
+		out[i] = apiTool{
+			Name:        d.Name,
+			Description: d.Description,
+			InputSchema: d.Parameters,
+		}
+	}
+	return out
+}
+
 // toAPIMessages converts agent.Message slice into the Anthropic wire format.
 // The system role is filtered out here because Anthropic carries it as a
 // top-level Request.SystemPrompt — sending role:"system" inside the
 // messages array would 400.
-func toAPIMessages(in []agent.Message) []apiMessage {
+//
+// Messages with Blocks are serialized as a []apiContentBlock JSON array;
+// plain-text messages are serialized as a JSON string for compatibility.
+func toAPIMessages(in []agent.Message) ([]apiMessage, error) {
 	out := make([]apiMessage, 0, len(in))
 	for _, m := range in {
 		if m.Role == agent.RoleSystem {
 			continue
 		}
-		out = append(out, apiMessage{Role: string(m.Role), Content: m.Content})
+
+		if len(m.Blocks) > 0 {
+			// Serialize as a content-block array.
+			blocks, err := marshalBlocks(m.Blocks)
+			if err != nil {
+				return nil, err
+			}
+			raw, err := json.Marshal(blocks)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, apiMessage{Role: string(m.Role), Content: raw})
+		} else {
+			// Plain string content.
+			raw, err := json.Marshal(m.Content)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, apiMessage{Role: string(m.Role), Content: raw})
+		}
+	}
+	return out, nil
+}
+
+// marshalBlocks converts agent.ContentBlock slice to []apiContentBlock.
+// tool_result blocks are serialized with a nested "content" string field
+// per the Anthropic wire format.
+func marshalBlocks(blocks []agent.ContentBlock) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			out = append(out, map[string]any{
+				"type": "text",
+				"text": b.Text,
+			})
+		case "tool_use":
+			m := map[string]any{
+				"type":  "tool_use",
+				"id":    b.ID,
+				"name":  b.Name,
+				"input": b.Input,
+			}
+			out = append(out, m)
+		case "tool_result":
+			m := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": b.ToolUseID,
+				"content":     b.Result,
+			}
+			if b.IsError {
+				m["is_error"] = true
+			}
+			out = append(out, m)
+		default:
+			return nil, fmt.Errorf("anthropic: unknown block type %q", b.Type)
+		}
+	}
+	return out, nil
+}
+
+// fromAPIContentBlocks converts the response content blocks to agent.ContentBlock.
+func fromAPIContentBlocks(blocks []apiContentBlock) []agent.ContentBlock {
+	out := make([]agent.ContentBlock, 0, len(blocks))
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			out = append(out, agent.NewTextBlock(b.Text))
+		case "tool_use":
+			out = append(out, agent.NewToolUseBlock(b.ID, b.Name, b.Input))
+		}
 	}
 	return out
 }
 
 // joinTextBlocks concatenates the text from every "text" content block.
-// Non-text blocks (tool_use in M2+) are skipped here; the agent loop reads
-// them out of the raw apiResponse in later milestones.
+// Non-text blocks (tool_use) are skipped.
 func joinTextBlocks(blocks []apiContentBlock) string {
 	var b strings.Builder
 	for _, blk := range blocks {

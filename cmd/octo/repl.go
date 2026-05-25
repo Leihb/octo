@@ -13,12 +13,14 @@ import (
 
 // replConfig holds everything runREPL needs.
 type replConfig struct {
-	a       *agent.Agent
-	session *agent.Session
-	noSave  bool
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
+	a        *agent.Agent
+	session  *agent.Session
+	noSave   bool
+	stdin    io.Reader
+	stdout   io.Writer
+	stderr   io.Writer
+	tools    []agent.ToolDefinition
+	executor agent.ToolExecutor
 }
 
 // runREPL runs the interactive multi-turn loop until the user exits or EOF.
@@ -84,11 +86,21 @@ func runREPL(cfg replConfig) int {
 			break
 		}
 
-		// Regular message — streaming turn.
+		// Regular message — streaming turn (or agentic loop when tools enabled).
 		startedAt := time.Now()
-		reply, err := a.TurnStream(context.Background(), line, func(delta string) {
-			fmt.Fprint(cfg.stdout, delta)
-		})
+		var (
+			reply agent.Reply
+			err   error
+		)
+		if len(cfg.tools) > 0 && cfg.executor != nil {
+			reply, err = a.RunStream(context.Background(), line, cfg.tools, cfg.executor, func(delta string) {
+				fmt.Fprint(cfg.stdout, delta)
+			})
+		} else {
+			reply, err = a.TurnStream(context.Background(), line, func(delta string) {
+				fmt.Fprint(cfg.stdout, delta)
+			})
+		}
 		if err != nil {
 			fmt.Fprintf(cfg.stderr, "\nerror: %v\n", err)
 			continue

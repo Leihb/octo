@@ -17,12 +17,17 @@ const (
 	RoleAssistant Role = "assistant"
 )
 
-// Message is a single turn in the conversation. Content is plain text for now;
-// when M2 adds tool calls and image attachments this expands into a richer
-// content-block type, but the wire-level shape stays compatible.
+// Message is a single turn in the conversation.
+//
+// Content carries plain text for simple turns. Blocks carries the richer
+// multi-part form used when the assistant performs tool calls or when the user
+// returns tool results. When both fields are set the provider adapter should
+// prefer Blocks; when only Content is set the adapter encodes it as a single
+// text block.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role    Role           `json:"role"`
+	Content string         `json:"content,omitempty"`
+	Blocks  []ContentBlock `json:"blocks,omitempty"`
 }
 
 // NewUserMessage constructs a Message with RoleUser.
@@ -42,4 +47,20 @@ func NewAssistantMessage(content string) Message {
 // adapter is responsible for that translation.
 func NewSystemMessage(content string) Message {
 	return Message{Role: RoleSystem, Content: content}
+}
+
+// NewToolUseMessage constructs an assistant Message whose content is a slice
+// of blocks that may include tool_use blocks. The blocks slice typically
+// contains one or more tool_use blocks (and optionally a preceding text block
+// with the model's reasoning).
+func NewToolUseMessage(blocks []ContentBlock) Message {
+	return Message{Role: RoleAssistant, Blocks: blocks}
+}
+
+// NewToolResultMessage constructs a user Message that carries tool execution
+// results back to the model. Each element of results must be a tool_result
+// block whose ToolUseID matches a tool_use block in the preceding assistant
+// message.
+func NewToolResultMessage(results []ContentBlock) Message {
+	return Message{Role: RoleUser, Blocks: results}
 }

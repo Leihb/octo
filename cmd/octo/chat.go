@@ -13,6 +13,7 @@ import (
 	"github.com/Leihb/octo/internal/provider"
 	"github.com/Leihb/octo/internal/provider/anthropic"
 	"github.com/Leihb/octo/internal/provider/openai"
+	"github.com/Leihb/octo/internal/tools"
 )
 
 // Provider names accepted by `--provider`.
@@ -52,6 +53,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	continueIDLong := fs.String("continue", "", "Session ID to resume")
 	noSave := fs.Bool("no-save", false, "Disable auto-save in REPL mode")
 	listSessions := fs.Bool("list-sessions", false, "Print the 10 most recent sessions and exit")
+	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -135,14 +137,19 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			sess = agent.NewSession(resolvedModel, *system)
 		}
 
-		return runREPL(replConfig{
+		cfg := replConfig{
 			a:       a,
 			session: sess,
 			noSave:  *noSave,
 			stdin:   stdin,
 			stdout:  stdout,
 			stderr:  stderr,
-		})
+		}
+		if *enableTools {
+			cfg.tools = tools.DefaultTools()
+			cfg.executor = tools.RegistryWithBash{}
+		}
+		return runREPL(cfg)
 	}
 
 	// ── Single-turn mode (original M2 behaviour) ──────────────────────────────
@@ -276,6 +283,7 @@ func (s providerSender) StreamMessages(
 func replyFromResponse(resp provider.Response) agent.Reply {
 	return agent.Reply{
 		Content:      resp.Content,
+		Blocks:       resp.Blocks,
 		Model:        resp.Model,
 		StopReason:   resp.StopReason,
 		InputTokens:  resp.InputTokens,
@@ -283,8 +291,76 @@ func replyFromResponse(resp provider.Response) agent.Reply {
 	}
 }
 
-// Compile-time assertions: providerSender satisfies both agent interfaces.
+// SendMessagesWithTools implements agent.ToolSender. It passes the tool
+// definitions to the provider via provider.Request.Tools and returns the full
+// content-block list (including tool_use blocks) in the Reply.
+func (s providerSender) SendMessagesWithTools(
+	ctx context.Context,
+	model, system string,
+	msgs []agent.Message,
+	maxTokens int,
+	tools []agent.ToolDefinition,
+) (agent.Reply, error) {
+	if s.p == nil {
+		return agent.Reply{}, errors.New("providerSender: provider is nil")
+	}
+	resp, err := s.p.Send(ctx, provider.Request{
+		Model:        model,
+		SystemPrompt: system,
+		Messages:     msgs,
+		MaxTokens:    maxTokens,
+		Tools:        tools,
+	})
+	if err != nil {
+		return agent.Reply{}, err
+	}
+	return replyFromResponse(resp), nil
+}
+
+// StreamMessagesWithTools implements agent.ToolStreamingSender. It passes
+// tools to the provider and streams text deltas via onChunk; tool_use blocks
+// are accumulated and returned in Reply.Blocks at the end of the stream.
+func (s providerSender) StreamMessagesWithTools(
+	ctx context.Context,
+	model, system string,
+	msgs []agent.Message,
+	maxTokens int,
+	tools []agent.ToolDefinition,
+	onChunk func(string),
+) (agent.Reply, error) {
+	if s.p == nil {
+		return agent.Reply{}, errors.New("providerSender: provider is nil")
+	}
+	req := provider.Request{
+		Model:        model,
+		SystemPrompt: system,
+		Messages:     msgs,
+		MaxTokens:    maxTokens,
+		Tools:        tools,
+	}
+	if sp, ok := s.p.(provider.StreamingProvider); ok {
+		resp, err := sp.SendStream(ctx, req, onChunk)
+		if err != nil {
+			return agent.Reply{}, err
+		}
+		return replyFromResponse(resp), nil
+	}
+
+	// Buffered fallback.
+	resp, err := s.p.Send(ctx, req)
+	if err != nil {
+		return agent.Reply{}, err
+	}
+	if onChunk != nil && resp.Content != "" {
+		onChunk(resp.Content)
+	}
+	return replyFromResponse(resp), nil
+}
+
+// Compile-time assertions: providerSender satisfies all agent sender interfaces.
 var (
-	_ agent.Sender          = providerSender{}
-	_ agent.StreamingSender = providerSender{}
+	_ agent.Sender              = providerSender{}
+	_ agent.StreamingSender     = providerSender{}
+	_ agent.ToolSender          = providerSender{}
+	_ agent.ToolStreamingSender = providerSender{}
 )
