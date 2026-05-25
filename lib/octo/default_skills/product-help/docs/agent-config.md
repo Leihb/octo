@@ -57,6 +57,20 @@ ClaudeCode-compatible variables are also supported:
 - **lite** — Cheaper/faster model for subagents and simple tasks
 - **fallback** — Used when the primary model is unavailable
 
+## Session Budgets
+
+Two opt-in guards in `~/.octo/config.yml` cap runaway tool loops and cost:
+
+```yaml
+settings:
+  max_turns: 30          # per-task turn cap; LLM tool-loops past this trigger abort. Default 30; set to nil for unlimited.
+  max_cost_usd: 5.0      # session USD cap (cumulative across tasks). Default nil (unlimited).
+```
+
+CLI override per run: `--max-turns N`, `--max-cost N`. Inside a session, `/cost` prints the current token totals and estimated USD spend.
+
+Cost is computed by `Octo::ModelPricing` from the active model's published rate; self-hosted or unknown models still report tokens but cost displays as `n/a`.
+
 ## Supported Providers
 
 Octo has built-in presets for:

@@ -26,6 +26,8 @@ octo agent [OPTIONS]
 | `-f, --file=PATH` | Attach file(s) (use with `-m`) |
 | `--agent=PROFILE` | Agent profile: `coding`, `general` (default: `coding`) |
 | `--model=MODEL` | Override the model to use |
+| `--max-turns=N` | Per-task turn budget; aborts when the LLM keeps tool-looping past this number (default: `30`, `0` disables) |
+| `--max-cost=N` | Session USD budget; aborts when cumulative cost exceeds this number (unlimited by default) |
 
 **Examples:**
 
@@ -78,5 +80,6 @@ During an agent session, you can use:
 | Command | Description |
 |---|---|
 | `/config` | Open configuration editor |
+| `/cost` | Show this session's token totals and estimated USD cost |
 | `/` | List and invoke skills |
 | `exit` or `quit` | End the session |
