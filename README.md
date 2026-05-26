@@ -1,154 +1,108 @@
-# Octo
+# octo-agent
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Leihb/octo/main.yml?label=build&style=flat-square)](https://github.com/Leihb/octo/actions)
-[![Release](https://img.shields.io/gem/v/octo-agent?label=release&style=flat-square&color=blue)](https://rubygems.org/gems/octo-agent)
+[![Go CI](https://img.shields.io/github/actions/workflow/status/Leihb/octo-agent/go.yml?label=ci&style=flat-square)](https://github.com/Leihb/octo-agent/actions)
 [![Website](https://img.shields.io/badge/website-octo--agent.dev-4f46e5?style=flat-square)](https://octo-agent.dev)
-[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1.0-red?style=flat-square)](https://www.ruby-lang.org)
+[![Go](https://img.shields.io/badge/go-%3E%3D%201.22-00ADD8?style=flat-square)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
 
 <p align="center">
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
-> ## 🚧 Octo is being rewritten in Go
->
-> This Ruby implementation is **frozen** as of `v0.11.2-final-ruby`. The full source remains on the [`archive/ruby`](https://github.com/Leihb/octo/tree/archive/ruby) branch and you can still `gem install octo-agent` to use it, but no new features or bug fixes will land on this line.
->
-> The next-generation Octo is being built in Go to ship as a single binary (zero install dependencies), with native Windows support and the same three-interface, three-protocol design. Track progress on `main` here, or watch the repo for releases. Estimated first Go alpha: 3-4 months.
+A functionality-first AI agent, distributed as a single Go binary. Speaks three native API protocols — **Anthropic Messages**, **OpenAI Chat Completions**, **AWS Bedrock** (planned) — and aims for three equal interfaces: **CLI**, **Web**, and **IM**.
 
-> This project is a hard fork of [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky). The original MIT copyright is preserved in [LICENSE.txt](LICENSE.txt); modifications are © 2026 Leihb (roy).
+## Status
 
-A **functionality-first** AI agent with three equal interfaces.
+> **Pre-1.0, active rewrite.** The Ruby implementation has been retired (preserved on the `archive/ruby` branch). This repository is now the Go rewrite, starting at `0.1.0-dev`. CLI is functional today; Web UI and IM bridges land in later milestones — see [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md).
 
-Octo is a Ruby tool for interacting with AI models. It speaks **Anthropic Messages**, **OpenAI** (Chat Completions + Responses), and **AWS Bedrock** natively, and works with any other provider that exposes one of those API shapes. It provides chat functionality and autonomous AI agent capabilities with tool use. Use it in the **terminal**, in a **web browser**, or through **instant messaging** — all three interfaces are first-class citizens with identical capabilities.
+## Install
 
-## Philosophy
-
-- **Three faces, one agent** — CLI, Web, and IM are all first-class. No interface is secondary
-- **Open skills** — Compatible with Claude Code skill format. Install any community skill without friction
-- **Token-pragmatic** — Uses tokens wisely, but never at the expense of getting the job done right
-
-## What Octo Is Not
-
-- Not a token-minimization obsession — functionality comes first
-- Not web-first — no master-worker architecture imposed on local CLI usage
-- Not a marketplace — no encrypted skills, no commercial skill ecosystem
-
-## Features
-
-| Feature | Description |
-|---|---|
-| **Interactive CLI** | Start an agent session directly in your terminal |
-| **Web UI** | Full chat interface with multi-session support at `localhost:8888` |
-| **IM Integration** | Feishu, WeCom, WeChat, Discord, Telegram — all with full parity |
-| **Skills** | Install, create, and evolve skills in standard Markdown format |
-| **BYOK** | Bring your own API key — any Anthropic / OpenAI / Bedrock-compatible model |
-| **Autonomous agent** | ReAct pattern with tool execution for complex tasks |
-
-## Installation
-
-### Building the in-progress Go version (from source)
-
-The Go rewrite is just scaffolding right now — only `octo version` and `octo help` are wired up — but the binary builds and the CI matrix already covers Linux, macOS, and Windows.
+Until tagged releases ship, build from source:
 
 ```bash
-git clone https://github.com/Leihb/octo.git
-cd octo
-make build      # produces ./octo
-./octo version
+git clone https://github.com/Leihb/octo-agent.git
+cd octo-agent
+make build       # produces ./octo
 ```
 
-`make install` puts the binary on `$GOPATH/bin`. Requires Go 1.22+.
-
-### RubyGem (frozen Ruby line)
-
-Requires Ruby >= 3.1.0
+Or install directly from Go:
 
 ```bash
-gem install octo-agent
+go install github.com/Leihb/octo-agent/cmd/octo@latest
 ```
 
-### One-line installer (macOS / Ubuntu)
+## Quick start
 
 ```bash
-/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/Leihb/octo/main/scripts/install.sh)"
+export ANTHROPIC_API_KEY=sk-ant-...      # or OPENAI_API_KEY=...
+
+# Single-shot
+octo chat "Explain ring buffers in 100 words"
+
+# Interactive REPL (multi-turn, session auto-saved)
+octo chat
+
+# Resume a previous session
+octo chat --list-sessions
+octo chat -c <session-id>
+
+# Streaming on by default; turn off with --stream=false
+octo chat --stream=false "..."
+
+# OpenAI / DeepSeek / Bailian (OpenAI-compatible)
+octo chat --provider openai --model gpt-4o-mini "..."
+
+# Anthropic-compatible third parties (DeepSeek, Kimi, etc.)
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
+  octo chat --model deepseek-chat "..."
+
+# Enable the terminal tool (LLM can run shell commands)
+octo chat --tools
 ```
 
-### Windows
+## What's implemented
 
-```powershell
-powershell -c "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Leihb/octo/main/scripts/install.ps1')))"
+| Milestone | Status | Description |
+|-----------|--------|-------------|
+| M1   | done | Go scaffold (cmd/octo, Makefile, CI matrix Linux/macOS/Windows) |
+| M1.2 | done | Anthropic Messages provider, single-turn `octo chat` |
+| M2   | done | Streaming SSE, OpenAI Chat Completions provider, `--provider` flag |
+| M3   | done | Interactive REPL, session persistence (`~/.octo/sessions/`), `/cost`, `/save`, `/sessions` |
+| M4   | done | Tool calling (agentic loop), `terminal` tool |
+| M5–M10 | planned | See [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md) |
+
+## Architecture
+
+Layered, one-directional dependency graph:
+
+```
+cmd/octo/          CLI entry (chat, REPL, sessions, slash commands)
+   ↓
+internal/agent/    History, sessions, content blocks, Sender interface,
+                   Agent.Turn / TurnStream / Run (tool-calling loop)
+   ↓
+internal/provider/ Provider interface + concrete implementations
+                   ├─ anthropic/   x-api-key, system top-level, content[].text
+                   └─ openai/      Bearer auth, system in messages[0]
+   ↓
+internal/tools/    ToolExecutor implementations (currently `terminal`)
 ```
 
-## Quick Start
+Each provider implements both **buffered** (`Send`) and **streaming** (`SendStream`) variants. The agent layer mirrors with `Sender` / `StreamingSender` / `ToolSender` / `ToolStreamingSender` — interfaces are added incrementally so non-streaming providers still work.
 
-### Terminal
+## Development
 
 ```bash
-octo            # start interactive agent in current directory
+make build         # ./octo
+make test          # go test -race ./...
+make vet           # go vet ./...
+make fmt-check     # gofmt -l . must be empty
 ```
 
-### Web UI
-
-```bash
-octo server     # default: http://localhost:8888
-```
-
-Options:
-
-```bash
-octo server --port 8080        # custom port
-octo server --host 0.0.0.0     # listen on all interfaces
-```
-
-### Configuration
-
-```bash
-$ octo
-> /config
-```
-
-Set your **API Key**, **Model**, and **Base URL**. Octo routes each model to its native protocol — Anthropic Messages, OpenAI (Chat Completions / Responses), or AWS Bedrock — so you keep features like Claude's `cache_control` byte-for-byte instead of going through a lossy OpenAI shim.
-
-Supported out of the box: **Claude (Anthropic) · GPT (OpenAI) · DeepSeek · Kimi (Moonshot) · MiniMax · OpenRouter · AWS Bedrock · Qwen** — or any custom endpoint that speaks one of the three protocols.
-
-## Skills
-
-Skills are the primary way to extend Octo's capabilities. A skill is a Markdown instruction file that guides the agent to accomplish a specific task using existing tools.
-
-- **Invoke with `/`** — fuzzy search and call any installed skill
-- **Create in natural language** — describe what you want; the agent drafts `SKILL.md`
-- **Self-evolving** — skills improve based on execution context and results
-- **Open format** — compatible with Claude Code / Markdown Pack / custom formats
-
-Skill directories:
-
-- Built-in: `lib/octo/default_skills/`
-- Project-level: `.octo/skills/`
-- User-level: `~/.octo/skills/`
-
-## Example Usage
-
-```bash
-$ octo
-> /new my-app        # scaffold a new project
-> Add user auth with email and password
-> How does the payment module work?
-```
-
-## Install from Source
-
-```bash
-git clone https://github.com/Leihb/octo.git
-cd octo
-bundle install
-bin/octo
-```
-
-## Contributing
-
-Bug reports and pull requests are welcome on GitHub at https://github.com/Leihb/octo. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR.
+See [`CLAUDE.md`](CLAUDE.md) for the project guide intended for AI coding agents working in this repo, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the human PR workflow.
 
 ## License
 
-Available as open source under the [MIT License](https://opensource.org/licenses/MIT).
+MIT. See [`LICENSE.txt`](LICENSE.txt).
+
+The Ruby implementation (frozen at `v0.11.2-final-ruby`, retained on the `archive/ruby` branch) was originally a hard fork of [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky); the Go rewrite is a clean reimplementation.

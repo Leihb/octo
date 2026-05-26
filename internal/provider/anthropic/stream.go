@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
 )
 
 // blockAccumulator holds in-progress state for a single content block while

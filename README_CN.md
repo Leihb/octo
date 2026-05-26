@@ -1,154 +1,108 @@
-# Octo
+# octo-agent
 
-[![Build](https://img.shields.io/github/actions/workflow/status/Leihb/octo/main.yml?label=build&style=flat-square)](https://github.com/Leihb/octo/actions)
-[![Release](https://img.shields.io/gem/v/octo-agent?label=release&style=flat-square&color=blue)](https://rubygems.org/gems/octo-agent)
+[![Go CI](https://img.shields.io/github/actions/workflow/status/Leihb/octo-agent/go.yml?label=ci&style=flat-square)](https://github.com/Leihb/octo-agent/actions)
 [![Website](https://img.shields.io/badge/website-octo--agent.dev-4f46e5?style=flat-square)](https://octo-agent.dev)
-[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.1.0-red?style=flat-square)](https://www.ruby-lang.org)
+[![Go](https://img.shields.io/badge/go-%3E%3D%201.22-00ADD8?style=flat-square)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)](LICENSE.txt)
 
 <p align="center">
   <a href="README.md">English</a> · <a href="README_CN.md">简体中文</a>
 </p>
 
-> ## 🚧 Octo 正在用 Go 重写
->
-> 当前 Ruby 实现已**冻结**在 `v0.11.2-final-ruby`。完整源码保留在 [`archive/ruby`](https://github.com/Leihb/octo/tree/archive/ruby) 分支，仍可 `gem install octo-agent` 安装使用，但不再有新功能或修复。
->
-> 新一代 Octo 用 Go 实现，目标是单二进制零依赖分发、原生 Windows 支持，保持三界面 + 三协议的同样设计。在本仓库 `main` 分支跟踪进度，或 watch 仓库等正式 release。预计 Go alpha 首发：3-4 个月内。
+以功能为先的 AI Agent，单一 Go 二进制分发。原生支持三种 API 协议 —— **Anthropic Messages**、**OpenAI Chat Completions**、**AWS Bedrock**（规划中），目标是 **CLI**、**Web**、**IM** 三种平等的交互界面。
 
-> 本项目硬分叉自 [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky)。上游 MIT 协议及原作者版权完整保留于 [LICENSE.txt](LICENSE.txt)；后续修改 © 2026 Leihb (roy)。
+## 状态
 
-一个**功能优先**的 AI Agent，三种界面一视同仁。
-
-Octo 是一个 Ruby 工具，用于与 AI 模型交互。原生支持 **Anthropic Messages**、**OpenAI**（Chat Completions + Responses）和 **AWS Bedrock** 三套 API 协议，也兼容任何复用这些协议的第三方端点。提供聊天功能和具备工具执行能力的自主 AI Agent。你可以在**终端**、**浏览器**或**即时通讯**中使用它 —— 三种界面都是一等公民，能力完全相同。
-
-## 理念
-
-- **三面一体** — CLI、Web、IM 都是一等公民，没有次要界面
-- **开放技能** — 兼容 Claude Code 技能格式，无缝安装社区技能
-- **Token 务实** — 合理使用 token，但绝不为了省钱而牺牲功能正确性
-
-## Octo 不是什么
-
-- 不是 token 最小化执念 — 功能优先
-- 不是 web 优先 — 本地 CLI 使用不受主从架构约束
-- 不是应用市场 — 没有加密技能，没有商业化技能生态
-
-## 特性
-
-| 特性 | 说明 |
-|---|---|
-| **交互式 CLI** | 直接在终端启动 Agent 会话 |
-| **Web UI** | 完整的聊天界面，支持多 Session，`localhost:8888` |
-| **IM 集成** | 飞书、企微、微信、Discord、Telegram —— 全部能力对等 |
-| **Skills** | 以标准 Markdown 格式安装、创建和进化技能 |
-| **BYOK** | 自带 API Key —— 任意 Anthropic / OpenAI / Bedrock 协议模型 |
-| **自主 Agent** | ReAct 模式配合工具执行，处理复杂任务 |
+> **Pre-1.0，处于重写期。** Ruby 实现已退役（保留在 `archive/ruby` 分支）。本仓库现在是 Go 重写版，版本号从 `0.1.0-dev` 起步。CLI 已可用，Web UI 和 IM 桥接在后续里程碑实现 —— 见 [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md)。
 
 ## 安装
 
-### 从源码构建 Go 版本（开发中）
-
-Go 重写目前只是脚手架——只通了 `octo version` 和 `octo help`——但二进制能构建，CI 已覆盖 Linux / macOS / Windows。
+正式 release 发布前先从源码构建：
 
 ```bash
-git clone https://github.com/Leihb/octo.git
-cd octo
-make build      # 生成 ./octo
-./octo version
+git clone https://github.com/Leihb/octo-agent.git
+cd octo-agent
+make build       # 产物 ./octo
 ```
 
-`make install` 把二进制放到 `$GOPATH/bin`。需要 Go 1.22+。
-
-### RubyGem（冻结状态）
-
-需要 Ruby >= 3.1.0
+或者直接 `go install`：
 
 ```bash
-gem install octo-agent
+go install github.com/Leihb/octo-agent/cmd/octo@latest
 ```
 
-### 一键安装（macOS / Ubuntu）
+## 快速上手
 
 ```bash
-/bin/bash -c "$(curl -sSL https://raw.githubusercontent.com/Leihb/octo/main/scripts/install.sh)"
+export ANTHROPIC_API_KEY=sk-ant-...      # 或 OPENAI_API_KEY=...
+
+# 单轮
+octo chat "用 100 字解释一下环形缓冲区"
+
+# 进入交互 REPL（多轮，自动保存 session）
+octo chat
+
+# 恢复历史 session
+octo chat --list-sessions
+octo chat -c <session-id>
+
+# 默认流式输出；关掉用 --stream=false
+octo chat --stream=false "..."
+
+# OpenAI / DeepSeek / 百炼（OpenAI 兼容）
+octo chat --provider openai --model gpt-4o-mini "..."
+
+# Anthropic 协议兼容的第三方（DeepSeek、Kimi 等）
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
+  octo chat --model deepseek-chat "..."
+
+# 启用 terminal 工具（LLM 可执行 shell 命令）
+octo chat --tools
 ```
 
-### Windows
+## 已实现
 
-```powershell
-powershell -c "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Leihb/octo/main/scripts/install.ps1')))"
+| 里程碑 | 状态 | 内容 |
+|--------|------|------|
+| M1   | 完成 | Go 脚手架（cmd/octo、Makefile、Linux/macOS/Windows CI 矩阵） |
+| M1.2 | 完成 | Anthropic Messages Provider，单轮 `octo chat` |
+| M2   | 完成 | SSE 流式输出，OpenAI Chat Completions Provider，`--provider` 标志 |
+| M3   | 完成 | 交互式 REPL，Session 持久化（`~/.octo/sessions/`），`/cost`、`/save`、`/sessions` |
+| M4   | 完成 | Tool Calling（agentic loop），`terminal` 工具 |
+| M5–M10 | 规划中 | 见 [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md) |
+
+## 架构
+
+分层、单向依赖：
+
+```
+cmd/octo/          CLI 入口（chat / REPL / sessions / 斜杠命令）
+   ↓
+internal/agent/    历史、Session、ContentBlock、Sender 接口、
+                   Agent.Turn / TurnStream / Run（工具调用循环）
+   ↓
+internal/provider/ Provider 接口 + 具体实现
+                   ├─ anthropic/   x-api-key，system 顶级字段，content[].text
+                   └─ openai/      Bearer 认证，system 放在 messages[0]
+   ↓
+internal/tools/    ToolExecutor 实现（目前只有 `terminal`）
 ```
 
-## 快速开始
+每个 Provider 同时实现**缓冲式** (`Send`) 和**流式** (`SendStream`) 变体。Agent 层对应有 `Sender` / `StreamingSender` / `ToolSender` / `ToolStreamingSender` —— 接口分层添加，不支持流式的 Provider 也能跑。
 
-### 终端
+## 开发
 
 ```bash
-octo            # 在当前目录启动交互式 Agent
+make build         # ./octo
+make test          # go test -race ./...
+make vet           # go vet ./...
+make fmt-check     # gofmt -l . 必须为空
 ```
 
-### Web UI
+[`CLAUDE.md`](CLAUDE.md) 是给 AI 编程助手在本仓库工作时看的指南；[`CONTRIBUTING.md`](CONTRIBUTING.md) 是人类 PR 流程。
 
-```bash
-octo server     # 默认地址：http://localhost:8888
-```
+## 许可
 
-选项：
+MIT。见 [`LICENSE.txt`](LICENSE.txt)。
 
-```bash
-octo server --port 8080        # 自定义端口
-octo server --host 0.0.0.0     # 监听所有接口
-```
-
-### 配置
-
-```bash
-$ octo
-> /config
-```
-
-设置你的 **API Key**、**模型**和 **Base URL**。Octo 会按模型分发到对应的原生协议 —— Anthropic Messages、OpenAI（Chat Completions / Responses）或 AWS Bedrock，避免走 OpenAI 兼容 shim 时丢失 Claude `cache_control` 等特性。
-
-开箱即支持：**Claude (Anthropic) · GPT (OpenAI) · DeepSeek · Kimi (Moonshot) · MiniMax · OpenRouter · AWS Bedrock · Qwen**，或任意走上述三种协议之一的自定义端点。
-
-## Skills
-
-Skills 是扩展 Octo 能力的主要方式。一个 skill 是一份 Markdown 指令文件，指导 Agent 使用现有工具完成特定任务。
-
-- **`/` 唤起** — 模糊搜索并调用已安装 skill
-- **自然语言创建** — 描述你想要什么，Agent 自动起草 `SKILL.md`
-- **自我进化** — 根据执行上下文和结果持续改进
-- **开放格式** — 兼容 Claude Code / Markdown Pack / 自定义格式
-
-Skill 目录：
-
-- 内置：`lib/octo/default_skills/`
-- 项目级：`.octo/skills/`
-- 用户级：`~/.octo/skills/`
-
-## 使用示例
-
-```bash
-$ octo
-> /new my-app        # 创建新项目脚手架
-> 添加邮箱密码登录功能
-> 支付模块是怎么实现的？
-```
-
-## 从源码安装
-
-```bash
-git clone https://github.com/Leihb/octo.git
-cd octo
-bundle install
-bin/octo
-```
-
-## 参与贡献
-
-欢迎在 GitHub 提交 Bug 报告和 Pull Request：https://github.com/Leihb/octo 。提 PR 前请先阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。
-
-## 许可证
-
-基于 [MIT 协议](https://opensource.org/licenses/MIT) 开源发布。
+Ruby 实现（`v0.11.2-final-ruby` 冻结，保留在 `archive/ruby` 分支）最初是从 [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky) 硬分叉而来；Go 重写版是从零干净重写。

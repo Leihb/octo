@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Leihb/octo/internal/agent"
+	"github.com/Leihb/octo-agent/internal/agent"
 )
 
 // TerminalTimeout is the maximum time a single terminal command may run.

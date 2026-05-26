@@ -1,7 +1,0 @@
-description: Verification sub-agent — read + run tests, confirm changes work as intended, never mutate code.
-model: lite
-forbidden_tools:
-  - write
-  - edit
-  - browser
-  - agent

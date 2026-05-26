@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Leihb/octo/internal/agent"
+	"github.com/Leihb/octo-agent/internal/agent"
 )
 
 // stubSender is a deterministic Sender for REPL tests — returns a fixed reply

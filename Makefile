@@ -24,10 +24,10 @@ GOFLAGS ?=
 #
 #   VERSION=0.12.0 make build
 #
-VERSION ?= 0.12.0-dev
+VERSION ?= 0.1.0-dev
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-LDFLAGS := -X github.com/Leihb/octo/internal/version.Version=$(VERSION) \
-           -X github.com/Leihb/octo/internal/version.Commit=$(COMMIT)
+LDFLAGS := -X github.com/Leihb/octo-agent/internal/version.Version=$(VERSION) \
+           -X github.com/Leihb/octo-agent/internal/version.Commit=$(COMMIT)
 
 .PHONY: all build install test cover vet fmt fmt-check tidy clean
 

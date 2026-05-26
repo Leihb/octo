@@ -1,26 +1,7 @@
-CLAUDE.md
-/.bundle/
-/.yardoc
-/_yardoc/
-/coverage/
-/doc/
-/pkg/
-/spec/reports/
-/tmp/
-/workspace/
-
-# rspec failure tracking
-.rspec_status
-*.gem
 .DS_Store
 .history
-coscli*
-openclacky/
-
-# Extracted .gem payload (produced by `tar -xf some.gem` or `gem unpack`)
-/checksums.yaml.gz
-/data.tar.gz
-/metadata.gz
+/tmp/
+/workspace/
 
 # Go build artefacts
 /octo
@@ -29,3 +10,10 @@ openclacky/
 *.test
 coverage.out
 coverage.html
+
+# IDE
+/.idea/
+/.vscode/
+
+# Local agent / config
+/.claude/settings.local.json

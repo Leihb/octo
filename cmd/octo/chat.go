@@ -9,11 +9,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
-	"github.com/Leihb/octo/internal/provider/anthropic"
-	"github.com/Leihb/octo/internal/provider/openai"
-	"github.com/Leihb/octo/internal/tools"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
+	"github.com/Leihb/octo-agent/internal/provider/anthropic"
+	"github.com/Leihb/octo-agent/internal/provider/openai"
+	"github.com/Leihb/octo-agent/internal/tools"
 )
 
 // Provider names accepted by `--provider`.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Leihb/octo/internal/agent"
+	"github.com/Leihb/octo-agent/internal/agent"
 )
 
 // replConfig holds everything runREPL needs.

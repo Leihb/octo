@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
 )
 
 // toolCallState accumulates streaming fragments for one tool call.

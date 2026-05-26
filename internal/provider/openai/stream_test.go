@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
 )
 
 // canonicalOpenAIStream is a realistic Chat Completions SSE transcript:

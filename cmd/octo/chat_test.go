@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
 )
 
 // TestRunChat_NoArgs_EntersREPL verifies that omitting a message starts the

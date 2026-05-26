@@ -1,8 +1,0 @@
-description: Pure-thinking sub-agent for design and planning — reads context, produces a written plan, never executes.
-model: lite
-forbidden_tools:
-  - write
-  - edit
-  - terminal
-  - browser
-  - agent
