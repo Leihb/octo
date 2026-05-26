@@ -13,7 +13,7 @@
 
 ## 状态
 
-> **Pre-1.0，处于重写期。** Ruby 实现已退役（保留在 `archive/ruby` 分支）。本仓库现在是 Go 重写版，版本号从 `0.1.0-dev` 起步。CLI 已可用，Web UI 和 IM 桥接在后续里程碑实现 —— 见 [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md)。
+> **Pre-1.0。** CLI 已可用，Web UI 和 IM 桥接在后续里程碑实现 —— 见 [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md)。
 
 ## 安装
 
@@ -104,5 +104,3 @@ make fmt-check     # gofmt -l . 必须为空
 ## 许可
 
 MIT。见 [`LICENSE.txt`](LICENSE.txt)。
-
-Ruby 实现（`v0.11.2-final-ruby` 冻结，保留在 `archive/ruby` 分支）最初是从 [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky) 硬分叉而来；Go 重写版是从零干净重写。

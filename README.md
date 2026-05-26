@@ -13,7 +13,7 @@ A functionality-first AI agent, distributed as a single Go binary. Speaks two na
 
 ## Status
 
-> **Pre-1.0, active rewrite.** The Ruby implementation has been retired (preserved on the `archive/ruby` branch). This repository is now the Go rewrite, starting at `0.1.0-dev`. CLI is functional today; Web UI and IM bridges land in later milestones — see [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md).
+> **Pre-1.0.** CLI is functional today; Web UI and IM bridges land in later milestones — see [`dev-docs/go-rewrite-roadmap.md`](dev-docs/go-rewrite-roadmap.md).
 
 ## Install
 
@@ -104,5 +104,3 @@ See [`CLAUDE.md`](CLAUDE.md) for the project guide intended for AI coding agents
 ## License
 
 MIT. See [`LICENSE.txt`](LICENSE.txt).
-
-The Ruby implementation (frozen at `v0.11.2-final-ruby`, retained on the `archive/ruby` branch) was originally a hard fork of [clacky-ai/openclacky](https://github.com/clacky-ai/openclacky); the Go rewrite is a clean reimplementation.

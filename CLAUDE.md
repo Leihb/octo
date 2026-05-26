@@ -6,8 +6,6 @@ Guidance for Claude Code and other AI coding agents working in this repository. 
 
 `octo-agent` — a Go 1.22+ AI agent CLI distributed as a single binary. Module path: `github.com/Leihb/octo-agent`. Roadmap and milestone plan: `dev-docs/go-rewrite-roadmap.md`.
 
-The Ruby implementation has been retired and removed from `main`. The frozen Ruby tree lives on the `archive/ruby` branch — read-only history; do not merge from it.
-
 ## Commands
 
 ```bash
@@ -46,7 +44,7 @@ Four-layer stack with one-directional dependencies:
    Provider wire quirks are encapsulated here — the agent layer never branches on protocol.
 
 4. **Tools (`internal/tools/`)** — concrete `ToolExecutor` implementations.
-   - `terminal.go` — current canonical example. Tool name `terminal` (matches Ruby precedent on `archive/ruby`; the implementation shells out via `sh -c`, not `/bin/bash`).
+   - `terminal.go` — current canonical example. Tool name `terminal` rather than `bash` because the implementation shells out via `sh -c`, not `/bin/bash`.
    - `DefaultRegistry` dispatches by tool name. `DefaultTools()` returns the set sent to the LLM when `--tools` is on.
 
 ## Conventions
@@ -62,7 +60,7 @@ From `.octorules`:
 
 ## Common pitfalls (from prior incidents)
 
-- **Sending `Accept-Encoding: gzip` to Bing's HTML search endpoint** returns a ~39 KB JavaScript skeleton instead of the ~120 KB real results page. The Ruby `web_search` tool deliberately omits this header. When porting that tool to Go (M6), the same rule applies — see `dev-docs/go-rewrite-roadmap.md` M6 section for the full list of HTML-scraping gotchas.
+- **Sending `Accept-Encoding: gzip` to Bing's HTML search endpoint** returns a ~39 KB JavaScript skeleton instead of the ~120 KB real results page. The M6 `web_search` tool must omit this header. See `dev-docs/go-rewrite-roadmap.md` M6 section for the full list of HTML-scraping gotchas.
 - **OpenAI streaming + `stream_options.include_usage`.** Third-party OpenAI-compatible servers diverge on support; we don't send it. The trade-off is that streamed OpenAI turns report zero token counts in `Reply.InputTokens` / `OutputTokens` — buffered (`Send`) responses carry full usage.
 - **OpenAI tool calls in streaming.** Function arguments arrive as JSON **fragments** across multiple chunks. The aggregator must concatenate by `tool_calls[i].index` before parsing.
 - **`finish_reason: "tool_calls"` (OpenAI) vs `stop_reason: "tool_use"` (Anthropic).** The OpenAI adapter normalises `tool_calls` → `tool_use` on the agent-facing surface; the agent loop only ever sees `"tool_use"`.
