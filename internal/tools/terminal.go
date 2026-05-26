@@ -65,24 +65,3 @@ func (TerminalTool) Execute(ctx context.Context, _ string, input map[string]any)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
-
-// DefaultRegistry is a simple ToolExecutor registry that contains only
-// TerminalTool. It is the default executor used when --tools is enabled.
-type DefaultRegistry struct{}
-
-// Execute dispatches to TerminalTool for "terminal" and returns an error for
-// unknown tools so the LLM receives a clean error result.
-func (DefaultRegistry) Execute(ctx context.Context, name string, input map[string]any) (string, error) {
-	switch name {
-	case "terminal":
-		return TerminalTool{}.Execute(ctx, name, input)
-	default:
-		return "", fmt.Errorf("unknown tool %q", name)
-	}
-}
-
-// DefaultTools returns the set of tool definitions that are active when
-// --tools is enabled. Currently this is just the terminal tool.
-func DefaultTools() []agent.ToolDefinition {
-	return []agent.ToolDefinition{TerminalTool{}.Definition()}
-}

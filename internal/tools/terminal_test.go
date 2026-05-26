@@ -104,23 +104,5 @@ func TestDefaultRegistry_Execute(t *testing.T) {
 	}
 }
 
-func TestDefaultRegistry_Execute_UnknownTool(t *testing.T) {
-	r := DefaultRegistry{}
-	_, err := r.Execute(context.Background(), "unknown_tool", nil)
-	if err == nil {
-		t.Error("unknown tool should return error")
-	}
-	if !strings.Contains(err.Error(), "unknown tool") {
-		t.Errorf("error = %q, should mention unknown tool", err)
-	}
-}
-
-func TestDefaultTools(t *testing.T) {
-	defs := DefaultTools()
-	if len(defs) != 1 {
-		t.Fatalf("len = %d, want 1", len(defs))
-	}
-	if defs[0].Name != "terminal" {
-		t.Errorf("Name = %q, want terminal", defs[0].Name)
-	}
-}
+// Broader DefaultRegistry / DefaultTools assertions live in registry_test.go
+// now that the registry hosts multiple tools.
