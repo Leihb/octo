@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Leihb/octo/internal/agent"
-	"github.com/Leihb/octo/internal/provider"
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/provider"
 )
 
 // DefaultBaseURL is OpenAI's API host. The actual Chat Completions endpoint

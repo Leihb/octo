@@ -1,6 +1,0 @@
-description: Persist information to long-term memory at ~/.octo/memories/. Handles file naming, topic merging, frontmatter, and size limits. Pure executor — the caller has already decided what to write.
-forbidden_tools:
-  - web_search
-  - web_fetch
-  - browser
-  - agent

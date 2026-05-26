@@ -3,7 +3,7 @@
 // The default values here describe an unreleased local build. Production
 // binaries set Version and Commit via -ldflags at build time:
 //
-//	go build -ldflags "-X github.com/Leihb/octo/internal/version.Version=0.12.0 -X github.com/Leihb/octo/internal/version.Commit=$(git rev-parse --short HEAD)" ./cmd/octo
+//	go build -ldflags "-X github.com/Leihb/octo-agent/internal/version.Version=0.12.0 -X github.com/Leihb/octo-agent/internal/version.Commit=$(git rev-parse --short HEAD)" ./cmd/octo
 package version
 
 // Version is the SemVer string for this build. Overridden via -ldflags.

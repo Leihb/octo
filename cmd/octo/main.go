@@ -14,7 +14,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/Leihb/octo/internal/version"
+	"github.com/Leihb/octo-agent/internal/version"
 )
 
 func main() {

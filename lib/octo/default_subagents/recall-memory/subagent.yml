@@ -1,8 +1,0 @@
-description: Recall relevant long-term memories on demand. Given a topic or question, judges relevance from pre-loaded metadata, loads only relevant files, and returns a concise summary to the parent agent.
-forbidden_tools:
-  - write
-  - edit
-  - web_search
-  - web_fetch
-  - browser
-  - agent

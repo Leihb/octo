@@ -1,9 +1,0 @@
-description: Read-only sub-agent for fast codebase exploration — search, grep, and read files but never modify them.
-model: lite
-forbidden_tools:
-  - write
-  - edit
-  - web_search
-  - web_fetch
-  - browser
-  - agent

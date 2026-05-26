@@ -1,117 +1,50 @@
-# Octo Project Rules (.octorules)
+# octo-agent Project Rules
 
-## ⚠️ STATUS: Ruby implementation FROZEN — Go rewrite incoming
+The canonical project guidance for contributors and AI coding agents. Keep this short — substantive design context belongs in `dev-docs/`.
 
-As of `v0.11.2-final-ruby`, the Ruby codebase is feature-frozen. The full
-Ruby source is preserved on the `archive/ruby` branch. Until the Go rewrite
-lands on `main`:
+## Project
 
-- **Do not add new features to the Ruby code.** Bug fixes for critical regressions are acceptable on `archive/ruby` but should not land on `main`.
-- **Main is in transition** — it currently still contains the Ruby tree but is being rebuilt in Go. New code on `main` should be Go.
-- **Skill format and product behaviour carry over** to Go intact. Markdown skills, the inbox model, ghost-text suggestion, background-task notifications — these are language-independent designs and will be reimplemented as-is.
-- See `dev-docs/CATCHUP_PLAN.md` and the README "🚧 Octo is being rewritten in Go" callout for the wider context.
+`octo-agent` is a Go AI agent CLI (Go 1.22+, single binary). Module path `github.com/Leihb/octo-agent`. CLI today; Web UI and IM bridges land in M8/M9 — see `dev-docs/go-rewrite-roadmap.md`.
 
-## Project Overview
-This is the `octo` Ruby gem - an AI agent with three equal interfaces (CLI, Web UI, IM bridges) for interacting with AI models (Claude, OpenAI, DeepSeek, Bedrock, etc.).
-It speaks three native API protocols — Anthropic Messages, OpenAI (Chat Completions + Responses), and AWS Bedrock — dispatched per-model in `lib/octo/providers.rb`. It provides chat functionality and autonomous AI agent capabilities with tool use.
+The Ruby implementation has been retired. It lives on the `archive/ruby` branch and is not part of `main`. Do not add Ruby files to `main`.
 
-## Project Structure
-- `lib/octo/` - Main gem source code
-  - `cli.rb` - Command-line interface using Thor
-  - `agent.rb` - Core AI agent with tool execution
-  - `tools/` - Built-in tools (file operations, web search, shell, etc.)
-  - `client.rb` - API client for AI models
-  - `config.rb` - Configuration management
-- `bin/` - Development executables
-- `spec/` - RSpec test suite
-- `octo.gemspec` - Gem specification
+## Layering
 
-## Development Guidelines
+```
+cmd/octo/          CLI entry, flag parsing, REPL, sessions
+internal/agent/    Agent loop, history, content blocks, Sender interfaces
+internal/provider/ Provider interface + per-vendor implementations
+internal/tools/    Concrete ToolExecutor implementations
+internal/version/  Version constants overridable via -ldflags
+```
 
-### Code Style
-- Follow Ruby conventions and best practices
-- Use frozen string literals: `# frozen_string_literal: true`
-- Keep classes focused and single-responsibility
-- Use meaningful variable and method names
-- **IMPORTANT**: All code comments must be written in English
-- Add descriptive comments for complex logic
-- Use clear, self-documenting code with English naming
-- **IMPORTANT**: Always use inline `private` with instance method definitions (e.g., `private def method_name`). Do NOT use standalone `private` keyword
-- **IMPORTANT**: For class methods (`def self.method_name`), do NOT use `private`. Class methods should be public
+Dependency direction is one-way: `provider → agent`, `tools → agent`, never the other way. `cmd/octo` is the only package allowed to import `provider` directly; everything else talks through `agent.Sender` / `StreamingSender` / `ToolSender` / `ToolStreamingSender`.
 
-### Architecture Patterns
-- Tools inherit from `Octo::Tools::Base`
-- Each tool defines: `tool_name`, `tool_description`, `tool_category`, `tool_parameters`
-- Agent uses React pattern (Reason-Act-Observe) for task execution
-- Configuration is managed through `Octo::Config`
-- CLI commands use Thor framework
+## Adding capability
 
-### Testing
-- Use RSpec for testing
-- Test files in `spec/` directory
-- **IMPORTANT**: Always run `bundle exec rspec` to verify tests pass after making changes
-- All tests must pass before considering a task complete
-- Maintain good test coverage
-- When modifying existing functionality, ensure related tests still pass
-- When adding new features, consider adding corresponding tests
-- **IMPORTANT**: When developing new features, write RSpec tests as needed and ensure they pass
-- **DO NOT** write custom test scripts unless explicitly requested by the user
-- **DO NOT** create markdown documentation unless explicitly requested by the user
-- **IMPORTANT**: When testing octo commands or debugging, always use `bundle exec ruby bin/octo` instead of the global `octo` command. The global command loads the system-installed gem version (e.g., `openocto-0.7.0`), not your local development code
+- **New provider** — implement `provider.Provider` (required) and optionally `provider.StreamingProvider`, `provider.ToolProvider`, `provider.ToolStreamingProvider`. Put it under `internal/provider/<name>/`. Each protocol's wire-format quirks are isolated inside the package; the agent layer must not learn about them.
+- **New tool** — implement `agent.ToolExecutor` and `Definition() agent.ToolDefinition` returning the JSON Schema the LLM sees. Place it under `internal/tools/<name>.go`. Register it in `tools.DefaultRegistry` and add it to `tools.DefaultTools()` if it belongs in the default set.
+- **New skill** (M7+) — `~/.octo/skills/<name>/SKILL.md` with the same frontmatter format Claude Code uses. The skill loader composes existing tools — adding a skill should not require new tool code.
 
-### Tool Development
-**IMPORTANT**: Do NOT add new Ruby Tool classes without careful consideration. Tools are low-level primitives (file I/O, shell, web search, etc.). Before creating a new Tool, always ask: can this capability be achieved with an existing Tool + a Skill (SKILL.md) instead? If yes, use a Skill.
+## Code style
 
-Only add a new Tool when it requires capabilities that no existing tool can provide (e.g., a new API integration, a new system-level operation).
+- Go 1.22 syntax. `gofmt -w` is the formatter; `go vet ./...` must pass.
+- Tests live next to code (`foo.go` + `foo_test.go`). Use `httptest.NewServer` for HTTP-mocked tests; do not hit live APIs in `go test ./...`.
+- Comments in English. Prefer self-documenting names over comments. Only comment the **why**, never the **what**.
+- No new third-party dependencies without justification in the PR description.
 
-When a new Tool is truly necessary:
-1. Create class in `lib/octo/tools/`
-2. Inherit from `Octo::Tools::Base`
-3. Define required class attributes
-4. Implement `execute` method
-5. Add optional `format_call` and `format_result` methods
-6. Require in `lib/octo.rb`
+## Workflow
 
-### Skill Development
-Skills are the preferred way to add new high-level capabilities. A skill is a Markdown instruction file (SKILL.md) that guides the Agent to accomplish a goal using existing Tools.
+- **Branch off latest `main`** before editing. Never commit on `main` directly.
+- Push lands via PR only. Squash-and-merge is the project default; force-push only after explicit approval.
+- Commit messages and PR descriptions in English.
+- One concept per PR. Mass mechanical changes (rename, move) can ride together but should be a single self-contained change set.
 
-- Built-in default skills live in `lib/octo/default_skills/<skill-name>/SKILL.md` (shipped with the gem)
-- Project-level skills live in `.octo/skills/<skill-name>/SKILL.md`
-- User-level skills live in `~/.octo/skills/<skill-name>/SKILL.md`
-- **Prefer Skills over new Tools** whenever the task can be composed from existing primitives (write, shell, read, etc.)
+## Testing
 
-### Agent Behavior
-- TODO manager is for planning only - must execute tasks after planning
-- Always use tools to create/modify files, don't just return code
-- Maintain conversation context across tasks
-- Follow cost and iteration limits
-- Support different permission modes (confirm_all, confirm_edits, auto_approve, plan_only)
+- `make test` runs `go test -race ./...` — must be green before pushing.
+- Integration tests against real provider APIs are run by hand with a real key, not in CI.
 
-## Dependencies
-- Ruby >= 3.1.0
-- faraday (~> 2.0) - HTTP client
-- thor (~> 1.3) - CLI framework
-- tty-prompt (~> 0.23) - Interactive prompts
-- tty-spinner (~> 0.9) - Progress indicators
-- diffy (~> 3.4) - Text diffs
+## What lives in `dev-docs/`
 
-## Important Notes
-- This gem speaks Anthropic Messages, OpenAI (Chat Completions + Responses), and AWS Bedrock natively; provider-to-protocol mapping lives in `lib/octo/providers.rb` and message-format adapters in `lib/octo/message_format/`
-- Security features include safe shell execution and path validation
-- Agent includes cost control and message compression features
-- Built-in tools cover file operations, web search, code execution, and project management
-
-## Execution Binary
-- Development: `bin/octo` (in repository)
-- Installed gem: `octo` command globally available
-
-## Configuration
-- Stores API keys and settings in user's home directory
-- Supports multiple AI model providers
-- Configurable through `octo config set` command
-
-## Personal Rules
-1. 先想清楚，再动手 — 不确定就问，千万别猜。AI 最可怕的不是不会写，而是"自信乱写"。
-2. 能简单，就别复杂 — 只写刚好够用的代码。过度抽象，大多数时候都是技术负债。
-3. 外科手术式修改 — 需求没提到的地方，一行别碰。每次改动，都必须说得清理由。
-4. 先定义"成功" — 写代码前，先明确什么叫"完成"。否则 AI 只是在随机输出。
+Architecture decisions, milestone plans, and verified-fact dumps (e.g. the iLink protocol notes in the roadmap). One Markdown file per topic. Don't commit speculative or unverified claims — verify before writing.

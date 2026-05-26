@@ -1,6 +1,0 @@
-description: Fast read-only codebase exploration — list the tree, find by pattern, read what's needed, report concisely. Cannot modify files.
-model: lite
-forbidden_tools:
-  - write
-  - edit
-  - agent

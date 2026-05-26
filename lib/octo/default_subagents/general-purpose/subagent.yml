@@ -1,4 +1,0 @@
-description: Broad-capability sub-agent for tasks that don't fit explore / plan / verification. All tools available except recursion.
-model: lite
-forbidden_tools:
-  - agent
