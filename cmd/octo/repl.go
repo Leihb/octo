@@ -93,8 +93,14 @@ func runREPL(cfg replConfig) int {
 			err   error
 		)
 		if len(cfg.tools) > 0 && cfg.executor != nil {
-			reply, err = a.RunStream(context.Background(), line, cfg.tools, cfg.executor, func(delta string) {
-				fmt.Fprint(cfg.stdout, delta)
+			// Wrap the new event handler as a text-only printer so REPL
+			// behaviour matches the pre-M5 streaming output exactly.
+			// Tool events are not surfaced in the REPL today; later they
+			// can grow inline cards or status lines.
+			reply, err = a.RunStream(context.Background(), line, cfg.tools, cfg.executor, func(ev agent.AgentEvent) {
+				if ev.Kind == agent.EventTextDelta {
+					fmt.Fprint(cfg.stdout, ev.Text)
+				}
 			})
 		} else {
 			reply, err = a.TurnStream(context.Background(), line, func(delta string) {

@@ -268,16 +268,19 @@ func (a *Agent) Run(ctx context.Context, userInput string, tools []ToolDefinitio
 	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
 }
 
-// RunStream is the streaming agentic loop. Behaves like Run but streams text
-// deltas to onChunk as they arrive from the provider.
+// RunStream is the streaming agentic loop. Behaves like Run but emits
+// structured AgentEvents to handler as work progresses — text deltas, tool
+// start/done/error, and a final EventTurnDone carrying the aggregated Reply.
 //
-// If tools is nil or executor is nil, RunStream is equivalent to TurnStream.
+// If tools is nil or executor is nil, RunStream falls back to TurnStream and
+// adapts text deltas into EventTextDelta events. handler may be nil, in
+// which case events are discarded but the run completes normally.
 func (a *Agent) RunStream(
 	ctx context.Context,
 	userInput string,
 	tools []ToolDefinition,
 	executor ToolExecutor,
-	onChunk func(string),
+	handler EventHandler,
 ) (Reply, error) {
 	if a.Sender == nil {
 		return Reply{}, fmt.Errorf("agent: no Sender configured")
@@ -289,41 +292,65 @@ func (a *Agent) RunStream(
 		return Reply{}, fmt.Errorf("agent: userInput must be non-empty")
 	}
 
-	// No tools → plain TurnStream.
+	// onChunk adapts text deltas from provider streams into EventTextDelta
+	// events. Nil-safe; empty deltas are silently dropped.
+	onChunk := func(delta string) {
+		if handler == nil || delta == "" {
+			return
+		}
+		handler(AgentEvent{Kind: EventTextDelta, Text: delta})
+	}
+
+	// No tools → plain TurnStream with the event-adapting onChunk. The
+	// terminal EventTurnDone is fired here so the caller's contract is
+	// identical regardless of whether tools were used.
 	if len(tools) == 0 || executor == nil {
-		return a.TurnStream(ctx, userInput, onChunk)
+		reply, err := a.TurnStream(ctx, userInput, onChunk)
+		if err == nil && handler != nil {
+			r := reply
+			handler(AgentEvent{Kind: EventTurnDone, Reply: &r})
+		}
+		return reply, err
 	}
 
 	// Try ToolStreamingSender first, then fall back to ToolSender (buffered).
 	if tss, ok := a.Sender.(ToolStreamingSender); ok {
-		return a.runStreamLoop(ctx, userInput, tools, executor, onChunk,
+		return a.runStreamLoop(ctx, userInput, tools, executor, handler,
 			func(ctx context.Context, msgs []Message) (Reply, error) {
 				return tss.StreamMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools, onChunk)
 			})
 	}
 	if ts, ok := a.Sender.(ToolSender); ok {
-		return a.runStreamLoop(ctx, userInput, tools, executor, onChunk,
+		return a.runStreamLoop(ctx, userInput, tools, executor, handler,
 			func(ctx context.Context, msgs []Message) (Reply, error) {
 				reply, err := ts.SendMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools)
-				if err == nil && onChunk != nil && reply.Content != "" {
+				if err == nil && reply.Content != "" {
 					onChunk(reply.Content)
 				}
 				return reply, err
 			})
 	}
 
-	// Neither interface available → plain TurnStream.
-	return a.TurnStream(ctx, userInput, onChunk)
+	// Neither tool-aware interface available → plain TurnStream with the
+	// event-adapting onChunk. EventTurnDone fires on success.
+	reply, err := a.TurnStream(ctx, userInput, onChunk)
+	if err == nil && handler != nil {
+		r := reply
+		handler(AgentEvent{Kind: EventTurnDone, Reply: &r})
+	}
+	return reply, err
 }
 
 // runStreamLoop is the shared inner loop for RunStream. The send function
-// encapsulates the provider call (streaming or buffered).
+// encapsulates the provider call (streaming or buffered) and is responsible
+// for surfacing text deltas itself; this loop is only responsible for tool
+// dispatch and tool-level events.
 func (a *Agent) runStreamLoop(
 	ctx context.Context,
 	userInput string,
 	tools []ToolDefinition,
 	executor ToolExecutor,
-	_ func(string), // onChunk already closed over by send
+	handler EventHandler,
 	send func(ctx context.Context, msgs []Message) (Reply, error),
 ) (Reply, error) {
 	a.History.Append(NewUserMessage(userInput))
@@ -342,10 +369,21 @@ func (a *Agent) runStreamLoop(
 		if reply.StopReason == "tool_use" {
 			a.History.Append(NewToolUseMessage(reply.Blocks))
 
+			// Emit EventToolStarted before dispatch so observers see the
+			// "thinking → tool call" boundary even if the tool blocks.
+			emitToolStartedEvents(handler, reply.Blocks)
+
 			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks)
 			if err != nil {
 				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
 			}
+
+			// Emit EventToolDone / EventToolError per result, pairing
+			// each result with the originating tool_use block so ToolName
+			// can be carried through (tool_result blocks don't carry it
+			// themselves).
+			emitToolResultEvents(handler, reply.Blocks, resultBlocks)
+
 			a.History.Append(NewToolResultMessage(resultBlocks))
 			continue
 		}
@@ -356,10 +394,67 @@ func (a *Agent) runStreamLoop(
 		}
 		a.History.Append(NewAssistantMessage(content))
 		reply.Content = content
+		if handler != nil {
+			r := reply
+			handler(AgentEvent{Kind: EventTurnDone, Reply: &r})
+		}
 		return reply, nil
 	}
 
 	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
+}
+
+// emitToolStartedEvents fires one EventToolStarted per tool_use block.
+// handler may be nil — the loop short-circuits cleanly.
+func emitToolStartedEvents(handler EventHandler, useBlocks []ContentBlock) {
+	if handler == nil {
+		return
+	}
+	for _, b := range useBlocks {
+		if b.Type != "tool_use" {
+			continue
+		}
+		handler(AgentEvent{
+			Kind:     EventToolStarted,
+			ToolID:   b.ID,
+			ToolName: b.Name,
+			Input:    b.Input,
+		})
+	}
+}
+
+// emitToolResultEvents pairs each tool_result with the originating tool_use
+// (matched on ID) so ToolName flows through to the EventDone / EventError
+// payload. tool_result blocks don't carry the tool name themselves — this
+// pairing is required to keep events fully self-describing for UI consumers.
+func emitToolResultEvents(handler EventHandler, useBlocks, resultBlocks []ContentBlock) {
+	if handler == nil {
+		return
+	}
+	// Build an id→name index once.
+	nameByID := make(map[string]string, len(useBlocks))
+	for _, b := range useBlocks {
+		if b.Type == "tool_use" {
+			nameByID[b.ID] = b.Name
+		}
+	}
+	for _, r := range resultBlocks {
+		if r.Type != "tool_result" {
+			continue
+		}
+		ev := AgentEvent{
+			ToolID:   r.ToolUseID,
+			ToolName: nameByID[r.ToolUseID],
+			Output:   truncateOutput(r.Result),
+		}
+		if r.IsError {
+			ev.Kind = EventToolError
+			ev.Err = r.Result // full untruncated error message in Err
+		} else {
+			ev.Kind = EventToolDone
+		}
+		handler(ev)
+	}
 }
 
 // dispatchTools calls executor.Execute for every tool_use block in blocks,

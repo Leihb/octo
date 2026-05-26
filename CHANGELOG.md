@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`terminal` tool** — first concrete tool; runs `sh -c <command>` with a 30s timeout, returns combined stdout+stderr, surfaces non-zero exits as `[exit: ...]` annotations rather than Go errors so the LLM can read and adapt.
 - **Session persistence** — JSON sessions under `~/.octo/sessions/<YYYYMMDD-HHMMSS>.json`, resume via `octo chat -c <id>`, list via `--list-sessions`, opt out with `--no-save`.
 - **REPL slash commands** — `/help`, `/cost` (token + USD estimate, per-model pricing), `/save`, `/sessions`, `/exit`, `/quit`.
+- **M5 — AgentEvent structured event stream** — `Agent.RunStream` now takes an `EventHandler` instead of `onChunk func(string)`. Events: `text_delta`, `tool_started`, `tool_done`, `tool_error`, `turn_done` (carries final `Reply`). Tool events identify the call by `ToolID` + `ToolName` + `Input`; `Output` is truncated to 512 bytes for previews while the agent's own conversation history keeps the full result. The REPL wraps the handler as a text-only printer so its behaviour is unchanged. Foundation for Web UI / IM tool-call visualization in M8 / M9.
 
 ### Notes
 - The Ruby implementation under `lib/`, `spec/`, `bin/octo`, `Gemfile`, `Rakefile`, `octo-agent.gemspec`, `.rubocop.yml`, `Dockerfile` (Ruby base image), `homebrew/octo-agent.rb`, `scripts/`, `benchmark/`, `sig/`, and `POSITIONING.md` (Ruby-era) has been removed from `main`. The frozen Ruby tree remains accessible at `archive/ruby`.

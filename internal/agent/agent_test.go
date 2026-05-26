@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -412,5 +413,205 @@ func TestAgent_Run_SenderWithoutToolSupport_FallsBackToTurn(t *testing.T) {
 	// Executor should NOT have been called.
 	if len(exec.called) != 0 {
 		t.Errorf("executor should not be called when sender has no ToolSender support")
+	}
+}
+
+// ─── RunStream() + AgentEvent tests ────────────────────────────────────────
+
+// failingExecutor returns an error from Execute, which the agent loop turns
+// into a tool_result block with IsError=true.
+type failingExecutor struct {
+	err error
+}
+
+func (f *failingExecutor) Execute(_ context.Context, _ string, _ map[string]any) (string, error) {
+	return "", f.err
+}
+
+func TestAgent_RunStream_NoTools_EmitsTextDeltaAndTurnDone(t *testing.T) {
+	// Without tools, RunStream falls back through TurnStream. With a plain
+	// Sender (no streaming variant), TurnStream synthesises a single
+	// onChunk call with the full content. That should surface as exactly
+	// one EventTextDelta + one EventTurnDone.
+	send := &fakeSender{reply: Reply{Content: "hello world", StopReason: "end_turn"}}
+	a := New(send, "m")
+
+	var events []AgentEvent
+	reply, err := a.RunStream(context.Background(), "hi", nil, nil, func(ev AgentEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if reply.Content != "hello world" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2 (TextDelta + TurnDone), got %+v", len(events), events)
+	}
+	if events[0].Kind != EventTextDelta || events[0].Text != "hello world" {
+		t.Errorf("events[0] = %+v", events[0])
+	}
+	if events[1].Kind != EventTurnDone || events[1].Reply == nil || events[1].Reply.Content != "hello world" {
+		t.Errorf("events[1] = %+v", events[1])
+	}
+}
+
+func TestAgent_RunStream_ToolUse_EmitsStartedAndDone(t *testing.T) {
+	// Two-round conversation: tool_use → end_turn.
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks: []ContentBlock{
+					NewToolUseBlock("call-1", "terminal", map[string]any{"command": "echo hi"}),
+				},
+			},
+			{Content: "The output was: hi", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{results: map[string]string{"terminal": "hi"}}
+	a := New(send, "m")
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	var events []AgentEvent
+	reply, err := a.RunStream(context.Background(), "run echo", defs, exec, func(ev AgentEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if reply.Content != "The output was: hi" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+
+	// Expect (in order):
+	// 1. EventToolStarted for call-1
+	// 2. EventToolDone for call-1
+	// 3. EventTextDelta with "The output was: hi" (round-2 buffered onChunk)
+	// 4. EventTurnDone with the final Reply
+	if len(events) < 4 {
+		t.Fatalf("events = %d, want >=4, got %+v", len(events), events)
+	}
+
+	if events[0].Kind != EventToolStarted {
+		t.Errorf("events[0].Kind = %q, want tool_started", events[0].Kind)
+	}
+	if events[0].ToolID != "call-1" || events[0].ToolName != "terminal" {
+		t.Errorf("events[0] tool id/name = %q/%q", events[0].ToolID, events[0].ToolName)
+	}
+	if got := events[0].Input["command"]; got != "echo hi" {
+		t.Errorf("events[0].Input.command = %v", got)
+	}
+
+	if events[1].Kind != EventToolDone {
+		t.Errorf("events[1].Kind = %q, want tool_done", events[1].Kind)
+	}
+	if events[1].ToolID != "call-1" || events[1].ToolName != "terminal" {
+		t.Errorf("events[1] tool id/name = %q/%q", events[1].ToolID, events[1].ToolName)
+	}
+	if events[1].Output != "hi" {
+		t.Errorf("events[1].Output = %q, want 'hi'", events[1].Output)
+	}
+
+	// Last event must be EventTurnDone.
+	last := events[len(events)-1]
+	if last.Kind != EventTurnDone || last.Reply == nil {
+		t.Errorf("last event = %+v, want EventTurnDone with Reply set", last)
+	}
+}
+
+func TestAgent_RunStream_ToolError_EmitsErrorEvent(t *testing.T) {
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks: []ContentBlock{
+					NewToolUseBlock("call-1", "terminal", nil),
+				},
+			},
+			{Content: "I see the error", StopReason: "end_turn"},
+		},
+	}
+	exec := &failingExecutor{err: fmt.Errorf("command not found")}
+	a := New(send, "m")
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	var events []AgentEvent
+	_, err := a.RunStream(context.Background(), "run", defs, exec, func(ev AgentEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+
+	// First should be tool_started, second tool_error.
+	if len(events) < 2 {
+		t.Fatalf("events = %d, want >=2", len(events))
+	}
+	if events[0].Kind != EventToolStarted {
+		t.Errorf("events[0] = %+v", events[0])
+	}
+	if events[1].Kind != EventToolError {
+		t.Errorf("events[1] = %+v, want tool_error", events[1])
+	}
+	if events[1].Err != "command not found" {
+		t.Errorf("events[1].Err = %q", events[1].Err)
+	}
+}
+
+func TestAgent_RunStream_NilHandlerTolerated(t *testing.T) {
+	// nil handler must be safe — events are dropped, the run still completes.
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks:     []ContentBlock{NewToolUseBlock("c1", "terminal", nil)},
+			},
+			{Content: "ok", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{}
+	a := New(send, "m")
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	reply, err := a.RunStream(context.Background(), "go", defs, exec, nil)
+	if err != nil {
+		t.Fatalf("RunStream(nil handler): %v", err)
+	}
+	if reply.Content != "ok" {
+		t.Errorf("reply.Content = %q", reply.Content)
+	}
+}
+
+func TestAgent_RunStream_TruncatesLongToolOutput(t *testing.T) {
+	long := strings.Repeat("x", EventToolOutputCap+200)
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks:     []ContentBlock{NewToolUseBlock("c1", "terminal", nil)},
+			},
+			{Content: "done", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{results: map[string]string{"terminal": long}}
+	a := New(send, "m")
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	var seen AgentEvent
+	_, err := a.RunStream(context.Background(), "go", defs, exec, func(ev AgentEvent) {
+		if ev.Kind == EventToolDone {
+			seen = ev
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen.Output) > EventToolOutputCap+len("…[truncated]") {
+		t.Errorf("Output not truncated: len=%d", len(seen.Output))
+	}
+	if !strings.HasSuffix(seen.Output, "…[truncated]") {
+		t.Errorf("Output should be marked truncated: %q", seen.Output[:50])
 	}
 }
