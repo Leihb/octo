@@ -318,6 +318,106 @@ func TestREPLToolEventHandler_EditFileRendersCard(t *testing.T) {
 	}
 }
 
+func TestREPLToolEventHandler_ToolProgressRendersBetweenStartedAndDone(t *testing.T) {
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	h(agent.AgentEvent{
+		Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "terminal",
+		Input: map[string]any{"command": "ls"},
+	})
+	h(agent.AgentEvent{Kind: agent.EventToolProgress, ToolID: "c1", ToolName: "terminal", Chunk: "first line"})
+	h(agent.AgentEvent{Kind: agent.EventToolProgress, ToolID: "c1", ToolName: "terminal", Chunk: "second line"})
+	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "terminal"})
+
+	out := buf.String()
+	if !strings.Contains(out, "│ first line\n│ second line\n") {
+		t.Errorf("expected progress chunks rendered with │ prefix:\n%s", out)
+	}
+	// Order: started → progress → done.
+	startedIdx := strings.Index(out, "↳ terminal:")
+	progressIdx := strings.Index(out, "│ first line")
+	doneIdx := strings.Index(out, "↳ terminal ✓")
+	if !(startedIdx < progressIdx && progressIdx < doneIdx) {
+		t.Errorf("wrong event ordering: started=%d progress=%d done=%d\n%s",
+			startedIdx, progressIdx, doneIdx, out)
+	}
+}
+
+func TestREPLToolEventHandler_ProgressSuppressedForCardTools(t *testing.T) {
+	// edit_file renders a card on tool_done; intermediate progress should
+	// NOT print, otherwise we'd get random output above the card.
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	input := map[string]any{
+		"path": "/tmp/x.go", "old_string": "a", "new_string": "b",
+	}
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "edit_file", Input: input})
+	h(agent.AgentEvent{Kind: agent.EventToolProgress, ToolID: "c1", ToolName: "edit_file", Chunk: "noisy line"})
+	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "edit_file"})
+
+	out := buf.String()
+	if strings.Contains(out, "│ noisy line") {
+		t.Errorf("progress should be suppressed for card-rendering tools:\n%s", out)
+	}
+	if !strings.Contains(out, "Update(") {
+		t.Errorf("card should still render:\n%s", out)
+	}
+}
+
+func TestREPLToolEventHandler_InputDeltaEmitsTypingIndicator(t *testing.T) {
+	// A few input_delta events before tool_started should emit a typing
+	// indicator line that closes when tool_started fires.
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	for i := 0; i < 3; i++ {
+		h(agent.AgentEvent{Kind: agent.EventToolInputDelta, ToolID: "c1", ToolName: "terminal", InputDelta: "{frag}"})
+	}
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "terminal", Input: map[string]any{"command": "ls"}})
+
+	out := buf.String()
+	if !strings.HasPrefix(out, "⋯ ···\n") {
+		t.Errorf("expected typing indicator before ↳ line, got:\n%q", out)
+	}
+	if !strings.Contains(out, "↳ terminal: command=ls") {
+		t.Errorf("expected ↳ line after typing indicator:\n%s", out)
+	}
+}
+
+func TestREPLToolEventHandler_InputDeltaCappedAtDotsLimit(t *testing.T) {
+	// Pump in more deltas than the visual cap — only inputDotsCap dots
+	// should ever be emitted before tool_started closes the line.
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	for i := 0; i < inputDotsCap+50; i++ {
+		h(agent.AgentEvent{Kind: agent.EventToolInputDelta, ToolID: "c1", ToolName: "terminal", InputDelta: "x"})
+	}
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "terminal", Input: nil})
+
+	out := buf.String()
+	dotCount := strings.Count(out, "·")
+	if dotCount != inputDotsCap {
+		t.Errorf("dotCount = %d, want %d (cap)", dotCount, inputDotsCap)
+	}
+}
+
+func TestREPLToolEventHandler_InputDeltaResetsBetweenCalls(t *testing.T) {
+	// After tool_started closes the dots, a NEXT tool's input deltas
+	// should start a fresh indicator (not append to the previous one).
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	h(agent.AgentEvent{Kind: agent.EventToolInputDelta, ToolID: "c1", ToolName: "terminal", InputDelta: "a"})
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "terminal", Input: nil})
+	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "terminal"})
+	h(agent.AgentEvent{Kind: agent.EventToolInputDelta, ToolID: "c2", ToolName: "terminal", InputDelta: "b"})
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c2", ToolName: "terminal", Input: nil})
+
+	out := buf.String()
+	// Two separate typing-indicator lines should appear (one dot each).
+	if strings.Count(out, "⋯ ·\n") != 2 {
+		t.Errorf("expected two independent typing indicators, got:\n%q", out)
+	}
+}
+
 func TestREPLToolEventHandler_PlainForcesEditFileToStatusLine(t *testing.T) {
 	// With plain=true, even edit_file should use the ↳ status path so
 	// users on constrained terminals (no truecolor, log scraping, etc.)

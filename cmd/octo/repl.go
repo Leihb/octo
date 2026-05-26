@@ -208,6 +208,9 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 	// Track whether the previous event was a text delta — if so, a tool
 	// status line needs a leading newline to start cleanly.
 	prevWasText := false
+	// Count of `·` typing-indicator dots emitted while the LLM streams the
+	// in-flight tool's input arguments. Reset on tool_started.
+	inputDots := 0
 
 	return func(ev agent.AgentEvent) {
 		switch ev.Kind {
@@ -215,8 +218,28 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 			fmt.Fprint(stdout, ev.Text)
 			prevWasText = true
 
+		case agent.EventToolInputDelta:
+			// One dot per JSON fragment, capped so a 500-line write_file
+			// content field doesn't wrap the typing indicator across the
+			// terminal. The dots line is closed when tool_started fires.
+			if inputDots == 0 {
+				if prevWasText {
+					fmt.Fprintln(stdout)
+					prevWasText = false
+				}
+				fmt.Fprint(stdout, "⋯ ")
+			}
+			if inputDots < inputDotsCap {
+				fmt.Fprint(stdout, "·")
+				inputDots++
+			}
+
 		case agent.EventToolStarted:
-			if prevWasText {
+			if inputDots > 0 {
+				// Close the typing-indicator line so the ↳ row starts clean.
+				fmt.Fprintln(stdout)
+				inputDots = 0
+			} else if prevWasText {
 				fmt.Fprintln(stdout)
 				prevWasText = false
 			}
@@ -228,6 +251,14 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 				return
 			}
 			fmt.Fprintf(stdout, "↳ %s: %s\n", ev.ToolName, summariseInput(ev.Input))
+
+		case agent.EventToolProgress:
+			// Card-rendering tools defer all output to their tool_done card,
+			// so progress chunks are dropped to avoid double-rendering.
+			if rendersAsCard(ev.ToolName, plain) {
+				return
+			}
+			fmt.Fprintf(stdout, "│ %s\n", ev.Chunk)
 
 		case agent.EventToolDone:
 			elapsed := time.Duration(0)
@@ -258,6 +289,11 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 		}
 	}
 }
+
+// inputDotsCap caps the typing indicator at a width that fits in any
+// reasonably-sized terminal without wrapping. The exact value isn't
+// load-bearing — pick something visually pleasant.
+const inputDotsCap = 40
 
 // rendersAsCard reports whether a tool's events should be rendered as a
 // rich diff/result card (true) or as a terse `↳ status` line (false).
