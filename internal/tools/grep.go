@@ -28,7 +28,8 @@ func (GrepTool) Definition() agent.ToolDefinition {
 			"Use mode='files_with_matches' for path-only output, mode='count' for " +
 			"per-file counts, or the default mode='content' to see matching lines. " +
 			"Set context_lines (or before/after) to include surrounding lines. " +
-			"Respects .gitignore. Requires `rg` on PATH.",
+			"Respects .gitignore. Matching lines over 500 chars are truncated " +
+			"with an [Omitted long matching line] marker. Requires `rg` on PATH.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -88,7 +89,11 @@ func (GrepTool) Execute(ctx context.Context, _ string, input map[string]any) (st
 		mode = "content"
 	}
 
-	args := []string{"--color=never"}
+	// --max-columns 500 truncates any single matching line longer than 500
+	// chars and emits a "[Omitted long matching line]" marker. Without this,
+	// a hit on a minified bundle / base64 blob can flood the LLM's context
+	// with one line. Matches the cap Claude Code's GrepTool uses.
+	args := []string{"--color=never", "--max-columns", "500"}
 	switch mode {
 	case "content":
 		// default rg output

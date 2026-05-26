@@ -78,7 +78,23 @@ func (EditFileTool) Execute(_ context.Context, _ string, input map[string]any) (
 	}
 	body := string(data)
 
-	count := strings.Count(body, oldStr)
+	// CRLF handling: an LLM that read the file via read_file (which uses
+	// bufio.Scanner — strips `\r` from `\r\n` lines) and then copies a
+	// substring back into old_string would compare against `\n`-terminated
+	// lines, but the on-disk file may have `\r\n`. Match in normalized
+	// (LF) space; if the original was CRLF, restore on write so the file's
+	// line-ending convention isn't silently flipped.
+	hasCRLF := strings.Contains(body, "\r\n")
+	bodyForMatch := body
+	oldForMatch := oldStr
+	newForReplace := newStr
+	if hasCRLF {
+		bodyForMatch = strings.ReplaceAll(body, "\r\n", "\n")
+		oldForMatch = strings.ReplaceAll(oldStr, "\r\n", "\n")
+		newForReplace = strings.ReplaceAll(newStr, "\r\n", "\n")
+	}
+
+	count := strings.Count(bodyForMatch, oldForMatch)
 	if count == 0 {
 		return "", fmt.Errorf("edit_file: old_string not found in %s", path)
 	}
@@ -91,9 +107,12 @@ func (EditFileTool) Execute(_ context.Context, _ string, input map[string]any) (
 
 	var updated string
 	if replaceAll {
-		updated = strings.ReplaceAll(body, oldStr, newStr)
+		updated = strings.ReplaceAll(bodyForMatch, oldForMatch, newForReplace)
 	} else {
-		updated = strings.Replace(body, oldStr, newStr, 1)
+		updated = strings.Replace(bodyForMatch, oldForMatch, newForReplace, 1)
+	}
+	if hasCRLF {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
 	}
 
 	if err := os.WriteFile(abs, []byte(updated), 0o644); err != nil {

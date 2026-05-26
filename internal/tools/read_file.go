@@ -27,7 +27,8 @@ func (ReadFileTool) Definition() agent.ToolDefinition {
 		Description: "Read a UTF-8 text file and return its content with cat -n-style " +
 			"line numbers. Up to 2000 lines per call — use offset/limit to paginate. " +
 			"Absolute paths are preferred; relative paths resolve against the current " +
-			"working directory.",
+			"working directory. Refuses binary extensions (executables, archives, " +
+			"images, PDFs, DBs) and blocking device files (/dev/random, /dev/tty etc).",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -57,6 +58,20 @@ func (ReadFileTool) Execute(_ context.Context, _ string, input map[string]any) (
 	abs, err := resolvePath(path)
 	if err != nil {
 		return "", err
+	}
+
+	// Refuse binaries by extension. Cheaper than mime-sniffing and stops
+	// the LLM from blowing its context on a multi-MB .exe / .png. PDFs and
+	// images would need separate tooling (image embedding, PDF text
+	// extraction) — out of scope for read_file.
+	if reason := isLikelyBinaryPath(abs); reason != "" {
+		return "", fmt.Errorf("read_file: refusing to read %s — %s", path, reason)
+	}
+
+	// Refuse device files that would block forever or generate infinite
+	// output. /dev/null is permitted because it just returns EOF immediately.
+	if isBlockedDevicePath(abs) {
+		return "", fmt.Errorf("read_file: refusing to read %s — device file would block or stream indefinitely", path)
 	}
 
 	offset := intArg(input, "offset", 1)
@@ -142,4 +157,77 @@ func intArg(input map[string]any, key string, dflt int) int {
 		return int(v)
 	}
 	return dflt
+}
+
+// binaryExtensions is the set of file extensions read_file refuses outright.
+// The list focuses on formats that are almost never useful as text in an
+// LLM context (executables, archives, media, compiled artefacts). PDFs and
+// images are *also* binary but excluded from this map — they're plausibly
+// useful via separate extraction tools we may add later, and the user-facing
+// error message becomes more accurate ("use a PDF tool") than the generic
+// "binary file" wording. For now those still hit this list as a catch-all.
+var binaryExtensions = map[string]string{
+	// Executables / libraries
+	".exe": "Windows executable", ".dll": "Windows library",
+	".so": "Linux shared object", ".dylib": "macOS dynamic library",
+	".o": "object file", ".a": "static archive", ".lib": "library",
+	".class": "Java class file", ".jar": "Java archive",
+	".pyc": "compiled Python", ".pyo": "compiled Python",
+	".wasm": "WebAssembly",
+	// Archives
+	".zip": "ZIP archive", ".tar": "tar archive", ".gz": "gzip archive",
+	".bz2": "bzip2 archive", ".xz": "xz archive", ".7z": "7-zip archive",
+	".rar": "RAR archive",
+	// Images
+	".png": "PNG image", ".jpg": "JPEG image", ".jpeg": "JPEG image",
+	".gif": "GIF image", ".bmp": "BMP image", ".webp": "WebP image",
+	".ico": "icon", ".tiff": "TIFF image", ".heic": "HEIC image",
+	// Audio / video
+	".mp3": "MP3 audio", ".mp4": "MP4 video", ".mov": "video",
+	".avi": "video", ".mkv": "video", ".webm": "video",
+	".ogg": "audio", ".wav": "audio", ".flac": "audio", ".m4a": "audio",
+	// Fonts
+	".ttf": "font", ".otf": "font", ".woff": "web font", ".woff2": "web font",
+	// Documents (non-text)
+	".pdf": "PDF document (use a PDF-aware tool)",
+	".doc": "Word document", ".docx": "Word document",
+	".xls": "Excel spreadsheet", ".xlsx": "Excel spreadsheet",
+	".ppt": "PowerPoint", ".pptx": "PowerPoint",
+	// Databases / binary data
+	".db": "database", ".sqlite": "SQLite database", ".sqlite3": "SQLite database",
+	".dat": "binary data",
+}
+
+// isLikelyBinaryPath returns a human-readable reason if the path's
+// extension is on the binary-refusal list, otherwise "".
+func isLikelyBinaryPath(absPath string) string {
+	ext := strings.ToLower(filepath.Ext(absPath))
+	if reason, ok := binaryExtensions[ext]; ok {
+		return reason + " (read_file only handles text)"
+	}
+	return ""
+}
+
+// blockedDevicePaths are paths whose read would block the agent forever
+// or generate effectively-infinite output. /dev/null is intentionally
+// absent — reading it just returns EOF and is safe.
+var blockedDevicePaths = map[string]struct{}{
+	"/dev/random":  {},
+	"/dev/urandom": {},
+	"/dev/zero":    {},
+	"/dev/full":    {},
+	"/dev/tty":     {},
+	"/dev/stdin":   {},
+	"/dev/stdout":  {},
+	"/dev/stderr":  {},
+}
+
+// isBlockedDevicePath reports whether the absolute path names a device
+// file that would block or stream indefinitely. The list is exact-match
+// only; /dev/pts/* and similar slot-allocated TTYs aren't covered here
+// because the LLM has no business reading them in the first place and
+// they'd surface via "would block" rather than "infinite output".
+func isBlockedDevicePath(absPath string) bool {
+	_, blocked := blockedDevicePaths[absPath]
+	return blocked
 }

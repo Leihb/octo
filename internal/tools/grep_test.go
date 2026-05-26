@@ -133,3 +133,32 @@ func TestGrep_RequiresPattern(t *testing.T) {
 		t.Fatal("missing pattern should error")
 	}
 }
+
+func TestGrep_TruncatesLongMatchingLines(t *testing.T) {
+	requireRg(t)
+	// Simulate a minified-bundle hit: one line of 1000 a's containing
+	// the pattern. With --max-columns 500, rg should suppress the body
+	// and emit the "[Omitted long matching line]" marker instead.
+	dir := t.TempDir()
+	longLine := strings.Repeat("a", 1000) + "NEEDLE" + strings.Repeat("b", 1000)
+	writeTestFile(t, filepath.Join(dir, "minified.js"), longLine+"\n")
+
+	out, err := GrepTool{}.Execute(context.Background(), "grep", map[string]any{
+		"pattern": "NEEDLE",
+		"path":    dir,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// The literal long run of 'a' must NOT appear in output.
+	if strings.Contains(out, strings.Repeat("a", 200)) {
+		sample := out
+		if len(sample) > 200 {
+			sample = sample[:200]
+		}
+		t.Errorf("long line leaked through; head of output:\n%s", sample)
+	}
+	if !strings.Contains(out, "Omitted long matching line") {
+		t.Errorf("expected omission marker; output:\n%s", out)
+	}
+}
