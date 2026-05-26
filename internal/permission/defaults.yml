@@ -1,0 +1,71 @@
+# Default permission rules. Used when ~/.octo/permissions.yml does not
+# exist or as the base layer that user rules extend.
+#
+# Decision priority within a tool's rule list is positional: the first rule
+# that matches wins. If no rule matches, the implicit default is `ask`.
+#
+# Pattern rules (for `terminal`) are case-sensitive SUBSTRING matches
+# against the input command. Path rules use glob syntax with `**` meaning
+# "any number of directory components". Hostname rules use glob with `*`
+# matching a single label (so `*.dev` matches `foo.dev` but not `foo.bar.dev`).
+
+terminal:
+  # Absolute disasters — never ask, always deny.
+  - deny:  { pattern: "rm -rf /" }
+  - deny:  { pattern: "rm -rf ~" }
+  - deny:  { pattern: ":(){ :|:& };:" }   # fork bomb
+  # Risky but legitimate — confirm interactively.
+  - ask:   { pattern: "rm -rf" }
+  - ask:   { pattern: "rm -fr" }
+  - ask:   { pattern: "git push --force" }
+  - ask:   { pattern: "git push -f " }
+  - ask:   { pattern: "chmod -R 777" }
+  - ask:   { pattern: "sudo " }
+  - ask:   { pattern: "curl " }            # could exfiltrate
+  - ask:   { pattern: "wget " }
+  - ask:   { pattern: "ssh " }
+  - ask:   { pattern: "scp " }
+  # Common safe commands — auto-allow so the user isn't drowning in prompts.
+  - allow: { pattern: "ls" }
+  - allow: { pattern: "cat " }
+  - allow: { pattern: "echo " }
+  - allow: { pattern: "pwd" }
+  - allow: { pattern: "git status" }
+  - allow: { pattern: "git log" }
+  - allow: { pattern: "git diff" }
+  - allow: { pattern: "git branch" }
+  - allow: { pattern: "go test" }
+  - allow: { pattern: "go build" }
+  - allow: { pattern: "go vet" }
+  - allow: { pattern: "gofmt" }
+  # Anything else falls through to the implicit `ask`.
+
+web_fetch:
+  # Block private / link-local / loopback ranges — SSRF protection.
+  - deny:  { hostname: ["10.*", "192.168.*", "172.16.*", "172.17.*", "172.18.*", "172.19.*", "172.2*.*", "172.30.*", "172.31.*", "127.*", "169.254.*", "localhost", "*.local"] }
+  # Pre-approved hosts known to be safe.
+  - allow: { hostname: ["github.com", "*.github.com", "stackoverflow.com", "*.stackoverflow.com", "go.dev", "*.go.dev", "pkg.go.dev"] }
+  # Other hosts fall through to ask.
+
+write_file:
+  - deny:  { path: ["**/.ssh/**", "/etc/**", "**/.env", "**/.env.*", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*"] }
+  - allow: { path: ["$CWD/**"] }
+  # Outside-CWD paths fall through to ask.
+
+edit_file:
+  - deny:  { path: ["**/.ssh/**", "/etc/**", "**/.env", "**/.env.*", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*"] }
+  - allow: { path: ["$CWD/**"] }
+
+# read_file is generally safe; only block the obvious credential bombs.
+read_file:
+  - deny:  { path: ["**/.ssh/id_*", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*", "**/.env", "**/.env.*"] }
+  - allow: { path: ["**"] }
+
+# Pattern-free tools default to allow — they don't have a meaningful
+# axis to gate on, and asking on every glob/grep would be unusable.
+glob:
+  - allow: { pattern: "" }
+grep:
+  - allow: { pattern: "" }
+web_search:
+  - allow: { pattern: "" }

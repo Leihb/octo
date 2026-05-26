@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/charmbracelet/lipgloss v1.1.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
