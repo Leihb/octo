@@ -1,12 +1,11 @@
-# Octo Go Rewrite — Roadmap M5–M10
+# Octo Go Rewrite — Roadmap
 
 > 本文档记录 octo Go 重写版本的架构决策和里程碑计划。
-> M1–M4 已完成（单轮对话 → 流式 → REPL + Session → Tool Calling）。
 > 目标：三界面平等（CLI / Web / IM）、100% 兼容 Claude Code Skill 格式、竞品级 agent harness。
 
 ---
 
-## 已完成里程碑（M1–M4）
+## 已完成里程碑
 
 | 里程碑 | 内容 | PR |
 |--------|------|-----|
@@ -14,7 +13,9 @@
 | M1.2 | `octo chat` 单轮 CLI，Anthropic Provider                            | #30 |
 | M2   | 流式输出（`--stream`），OpenAI Provider，`--provider` / `--model`   | #32 / #34 |
 | M3   | 交互式 REPL，Session 持久化（`~/.octo/sessions/`），`-c` 续话       | #36 |
-| M4   | Tool Calling 核心（agentic loop + bash tool），四接口 Sender         | #38 |
+| M4   | Tool Calling 核心（agentic loop + terminal tool），四接口 Sender    | #38 |
+| M5   | AgentEvent 结构化事件流（替换 `onChunk`，为 Web/IM 透出工具调用）   | #43 |
+| M6   | 核心工具集（read/write/edit/glob/grep/web_fetch/web_search）        | #46 |
 
 ---
 
@@ -202,6 +203,99 @@ internal/tools/
 
 ---
 
+## M6.5 — 工具安全 + 权限层（M8 / M9 的硬前置）
+
+**背景**：M6 完成后我们对比了 Claude Code / Codex 的同类实现，发现 octo 工具层缺一整套**权限/沙箱机制**。Claude Code 每个工具 1/3 代码量在做 allow/deny/ask 规则、UNC 路径防护、secret 扫描、preapproved host 等检查；Codex 有独立的 `sandboxing` / `network_approval` 模块。我们目前**裸跑 `Execute`**。
+
+**为什么是 M8/M9 的硬前置**：
+
+| 里程碑 | 不加权限层的暴露面 |
+|--------|-------------------|
+| M8 Web Server | `octo serve` 起 HTTP server，LLM 经工具调用直接执行 `terminal` → **公网 RCE** |
+| M9 WeChat Bridge | 任何加 bot 的微信用户都能让 LLM 跑任意 shell 命令 → **RCE** |
+
+⚠️ **M6.5 落地前，M8/M9 只能跑在 localhost / 完全可信环境**。这点在 M8/M9 验收里要写死。
+
+### 范围
+
+1. **权限规则系统**（核心）
+   - 配置文件：`~/.octo/permissions.yml`（YAML）
+   - 规则维度：`tool name × input pattern × decision { allow | deny | ask }`
+   - 优先级：deny > ask > allow（命中即停）
+   - 示例：
+     ```yaml
+     terminal:
+       - deny: "rm -rf"
+       - deny: "git push --force"
+       - ask:  "git push"
+       - ask:  "sudo"
+       - allow: "ls"
+       - allow: "cat"
+       # 未命中默认 ask
+     web_fetch:
+       - deny:  hostname: ["10.*", "192.168.*", "127.*", "localhost"]   # 内网
+       - allow: hostname: ["github.com", "stackoverflow.com", "*.dev"]
+     write_file / edit_file:
+       - deny:  path: ["~/.ssh/*", "/etc/*", "**/.env*"]
+       - allow: path: ["$CWD/**"]
+     ```
+
+2. **代码层 hooks**
+   - 每个 `ToolExecutor.Execute` 之前插入 `CheckPermission(ctx, name, input)` 步骤
+   - 返回 `{ allow, deny, ask }`；ask 在 CLI 弹交互窗口（用 AskUserQuestion 模式），HTTP/IM 模式由调用方决定怎么呈现
+   - 决定后缓存到 session 级别（"this turn" / "this session" / "always"）
+   - 拒绝结果以 `EventToolError` 形式回到 agent 循环，让 LLM 自己处理
+
+3. **read-before-write 强制**
+   - `write_file` / `edit_file` 检查目标路径是否在本 session 的 `readFileState` 里
+   - 不在 → 返回 `"File has not been read yet. Read it first."`（Claude Code 原文）
+   - 在但 mtime > readTimestamp → 返回 `"File has been modified since read..."` 强制重读
+   - 防 LLM 半凭印象覆盖最新代码
+
+4. **terminal 工具安全检查**（对标 Claude Code BashTool 的子集）
+   - 危险命令警告：`rm -rf`、`git push --force`、`chmod -R 777` 等命中后必须 `ask`，不能 `allow`
+   - 路径污染检测：命令中包含 `~/.ssh`、`/etc/passwd`、`/etc/shadow` 等敏感路径时 `ask`
+   - Plan mode 只读：未来 plan mode 引入时，只允许只读命令（cat/ls/grep/find/git status/git log）
+   - Sed-edit 拦截：检测 `sed -i` / `sed -e ... > file` 模式，让它走 edit_file 而非绕过权限
+
+5. **其他对标遗漏**（搭车一起做，单独做不划算）
+   - `read_file` UNC 路径防护（`\\` / `//` 前缀直接拒绝，避免 Windows NTLM 凭据泄漏）
+   - `write_file` secret 扫描：写入内容如果像 AWS key / SSH 私钥 / `.env` 形式，要求 `ask`
+   - `web_fetch` cross-host redirect 检测：3xx 跨主机时不自动跟，返回引导 LLM 重新发起请求
+
+### 实现切片
+
+| 子任务 | 大约工作量 | 备注 |
+|--------|-----------|------|
+| `internal/permission/` 包搭骨架（规则解析、匹配引擎、CheckPermission API）| 2d | 核心 |
+| 每个工具加 CheckPermission hook | 1d | 8 个工具×几行 |
+| `~/.octo/permissions.yml` 加载 + 默认规则模板 | 0.5d | |
+| CLI ask 交互（直接复用现有 AskUserQuestion 模式）| 0.5d | |
+| read-before-write 跟踪 + readFileState | 1d | |
+| Terminal 危险命令检测 + secret 扫描 | 1d | 黑名单 + 简单 regex |
+| 测试 + 文档 | 1d | |
+
+**总计 ~7d** 单人；这是 M8 之前不可省略的工作。
+
+### 验收
+
+- `~/.octo/permissions.yml` 不存在时使用安全默认（terminal: 全部 ask、文件读写: 限 CWD、网络: 限 github/stackoverflow 等公认安全域名）
+- LLM 想跑 `rm -rf` 时，CLI 弹 ask；选 deny 后 LLM 收到 `EventToolError` 并能自适应
+- 写 `~/.ssh/known_hosts` 直接被拒绝（deny 规则匹配）
+- 写一个文件之前没读过 → 拒绝；mtime 改了之后再写 → 拒绝
+- `web_fetch https://github.com/...` 直接 allow（preapproved）；`web_fetch http://10.0.0.1/...` 直接 deny
+- `octo serve` 起来后，curl 一个 prompt 触发 `terminal: "ls"`，正确返回结果且无权限弹窗（ls 在默认 allow 表里）
+
+### 已交付的 M6.5 子集
+
+- `read_file` 二进制扩展名 + 设备文件拒绝（PR #46 fixup）
+- `edit_file` CRLF 归一化（PR #46 fixup）
+- `grep --max-columns 500` 防上下文淹没（PR #46 fixup）
+
+剩余项目仍待做。
+
+---
+
 ## M7 — Skill 加载器（100% Claude Code 兼容）
 
 **目标**：实现与 Claude Code `/` 斜杠命令完全兼容的 Skill 系统。
@@ -268,6 +362,8 @@ triggers:
 
 **目标**：HTTP server 提供 REST + SSE 接口，配套 Web UI 展示 agent 执行过程。
 
+> ⚠️ **依赖 M6.5**。M6.5（工具权限层）落地前，M8 只能监听 `127.0.0.1` 或 Unix socket，禁止暴露到公网/局域网——否则任何能命中 HTTP 端点的人都能通过 LLM 调用 `terminal` 工具拿 RCE。M8 启动时如果检测到 `--bind` 不在本机，必须报错退出。
+
 ### API 设计
 
 ```
@@ -310,6 +406,8 @@ data: {"kind":"turn_done","reply":{"content":"...","input_tokens":100}}
 ---
 
 ## M9 — WeChat iLink Bridge
+
+> ⚠️ **依赖 M6.5**。M6.5（工具权限层）落地前不要部署 M9。任何加 bot 的微信用户都能通过对话让 LLM 跑 `terminal` 工具，等价于把 shell 开放给陌生人。M9 配置必须强校验 `permissions.yml` 存在且 `terminal` 工具不在 default-allow 列表。
 
 **技术背景**（协议于 2026-03 开放）：
 
@@ -414,13 +512,17 @@ M5 AgentEvent     ←── 基础，影响所有后续
   │
   ├── M6 Core Tools  ←── M7/M9 依赖工具能力
   │     │
-  │     ├── M7 Skill Loader  ←── Claude Code 兼容层
+  │     ├── M6.5 工具安全/权限层  ←── M8/M9 的硬前置（公网暴露不可省）
+  │     │     │
+  │     │     ├── M7 Skill Loader  ←── 可并行 M8
+  │     │     │
+  │     │     ├── M8 Web Server    ←── 必须 M6.5 落地后才能跑非 localhost
+  │     │     │
+  │     │     └── M9 WeChat iLink  ←── 必须 M6.5 落地后才能上线
   │     │
-  │     └── M8 Web Server    ←── 可并行 M7
+  │     └── (M6.5 旁路：M7 仅做 SKILL.md 加载，与 M6.5 解耦，可并行)
   │
-  └── M9 WeChat iLink  ←── M6 工具 optional，M5 必须
-        │
-        └── M10 Sub-Agent  ←── 最后做，需要整体稳定
+  └── M10 Sub-Agent  ←── 最后做，需要整体稳定
 ```
 
 ---
