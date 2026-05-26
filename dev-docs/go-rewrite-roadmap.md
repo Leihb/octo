@@ -119,26 +119,64 @@ REPL 兼容层：`repl.go` 把 `EventHandler` 包装为只打印 `EventTextDelta
 | `glob` | 文件模式匹配，按 mtime 排序 | 返回路径列表 |
 | `grep` | ripgrep 封装，content/files/count 三模式 | 支持 -A/-B/-C context |
 | `web_fetch` | HTTP GET 转 Markdown | Jina reader 代理（`r.jina.ai/`） |
-| `web_search` | 网络搜索 | **Brave Search API**（默认），可选 Tavily / Serper |
+| `web_search` | 网络搜索 | 默认零 key 直抓 HTML（DDG + Bing 兜底），可选付费 API |
 
 ### web_search 实现
 
-> **背景**：Bing Search API 已于 2025-08 停服，roadmap 旧版指向它要换。
+**设计哲学**（沿用 Ruby 版 `lib/octo/tools/web_search.rb` 的踩坑经验）：
+- **零启动成本是默认值** —— 开源用户拉下来即可用，不强制注册 key
+- 付费 API 是 _可选升级_，env 设了就优先用，不设也能跑
 
-候选搜索后端按优先级：
+**后端优先级（运行时按这个顺序尝试）：**
 
-| 后端 | 端点 | 免费额度 | 认证 env |
-|------|------|----------|----------|
-| **Brave Search**（默认） | `https://api.search.brave.com/res/v1/web/search` | 2000 次/月，独立索引 | `BRAVE_SEARCH_API_KEY` |
-| Tavily（AI agent 专用） | `https://api.tavily.com/search` | 1000 次/月，带 LLM 摘要 | `TAVILY_API_KEY` |
-| Serper.dev（Google 代理） | `https://google.serper.dev/search` | 2500 免费试用 | `SERPER_API_KEY` |
+| 优先级 | 后端 | 触发条件 | 备注 |
+|--------|------|----------|------|
+| 1 | Brave Search API | `BRAVE_SEARCH_API_KEY` 已设 | 独立索引，2000 次/月免费 |
+| 2 | Tavily API | `TAVILY_API_KEY` 已设 | AI agent 专用，自带 LLM 摘要 |
+| 3 | Serper.dev | `SERPER_API_KEY` 已设 | Google 代理，2500 次免费试用 |
+| 4 | **DuckDuckGo HTML**（默认兜底）| 无条件 | `html.duckduckgo.com/html/?q=` |
+| 5 | **Bing HTML**（最后兜底）| 无条件 | `cn.bing.com/search`（国内直连） |
+
+> Bing Search **API** 已于 2025-08 停服。Bing HTML 抓取通道仍可用，但不是同一个东西。
+
+### HTML 抓取通道的实战细节（从 Ruby 版搬过来，全是踩过的坑）
 
 ```go
 // internal/tools/web_search.go
-// 实际后端按 env var 优先级：BRAVE > TAVILY > SERPER
-// 都未设置时返回明确错误，不 panic
-// 响应归一化为 [{title, url, snippet}]，默认 top 5
+// 关键约定：
+// 1. 5 个真实浏览器 UA 轮播（Mac/Windows/Linux × Chrome 122/124）
+// 2. 完整 browser header 集：Sec-Fetch-Dest=document / Mode=navigate /
+//    Site=none / Upgrade-Insecure-Requests=1 / Accept-Language=zh-CN,zh;q=0.9,en;q=0.8
+// 3. *不设* Accept-Encoding —— 一旦发 gzip，Bing 会返回 ~39KB 的 JS-only
+//    骨架页而不是 ~120KB 的真 HTML。这是 Ruby 版花了好一阵才定位的坑。
+// 4. cn.bing.com 在非中国 IP 上会 302 到 www.bing.com，必须跟 redirect
+//    （最多 2 跳）。
+// 5. Bing 的真实链接藏在 bing.com/ck/a?...&u=a1<URL-safe base64>&ntb=1
+//    解码：去掉 "a1" 前缀 → base64 URL-safe decode → 真实 URL
+//    decode 失败时直接返回原 URL，不要让一条坏链接打掉整次搜索。
+// 6. DuckDuckGo 单次失败后冷却 10 分钟，期间跳过它直接走 Bing。
+// 7. 超时：read 8s / open 5s。搜索是同步阻塞，agent 等不起。
 ```
+
+### 归一化输出
+
+```go
+type Result struct {
+    Title    string
+    URL      string
+    Snippet  string
+}
+
+type Response struct {
+    Query    string
+    Results  []Result
+    Count    int
+    Provider string  // 实际用了哪个后端，"brave" / "bing" / "ddg" / ...
+    Error    string  // 失败时填，永远不 panic / 不 return Go error 出工具边界
+}
+```
+
+`Provider` 字段把"实际走了哪条路"暴露给 agent，避免 LLM 拿着零结果以为是搜索结果为零（而其实是后端全挂）。
 
 ### 目录结构
 
@@ -158,8 +196,9 @@ internal/tools/
 ### 验收
 
 - `octo chat --tools` 下 LLM 能读/写/编辑当前目录文件
-- `web_search "Go generics tutorial"` 返回 5 条结果
-- 所有搜索 env 未设时工具返回明确错误，不 panic
+- `web_search "Go generics tutorial"` 默认无任何 env 设置即可返回 5 条结果（走 DDG / Bing HTML）
+- 设置 `BRAVE_SEARCH_API_KEY` 后再跑同一查询，`Provider` 字段切到 `"brave"`
+- 所有后端全挂时返回 `Error` 字段非空、`Results` 为空，绝不 panic
 
 ---
 
