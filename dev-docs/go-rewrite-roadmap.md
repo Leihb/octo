@@ -155,7 +155,9 @@ REPL 兼容层：`repl.go` 把 `EventHandler` 包装为只打印 `EventTextDelta
 //    解码：去掉 "a1" 前缀 → base64 URL-safe decode → 真实 URL
 //    decode 失败时直接返回原 URL，不要让一条坏链接打掉整次搜索。
 // 6. DuckDuckGo 单次失败后冷却 10 分钟，期间跳过它直接走 Bing。
-// 7. 超时：read 8s / open 5s。搜索是同步阻塞，agent 等不起。
+// 7. 超时：12s 整体超时（搜索是同步阻塞，agent 等不起）。
+//    分阶段 open/read 超时在 Go net/http 需要 custom Transport.DialContext，
+//    工程量不值，统一用 client.Timeout。
 ```
 
 ### 归一化输出

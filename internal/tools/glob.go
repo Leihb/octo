@@ -33,7 +33,9 @@ func (GlobTool) Definition() agent.ToolDefinition {
 		Name: "glob",
 		Description: "Find files matching a glob pattern. Supports `**` for any " +
 			"directory depth (e.g. `src/**/*.go`). Returns up to 200 paths sorted " +
-			"by modification time descending (most recently changed first).",
+			"by modification time descending (most recently changed first). " +
+			"Skips `.git`, `node_modules`, `vendor`, and `.venv` at the directory " +
+			"level — pass an explicit path under those if you need to look there.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -114,8 +116,9 @@ func (GlobTool) Execute(_ context.Context, _ string, input map[string]any) (stri
 
 	sort.Slice(matches, func(i, j int) bool { return matches[i].mtime > matches[j].mtime })
 
+	totalMatches := len(matches)
 	truncated := false
-	if len(matches) > GlobMaxResults {
+	if totalMatches > GlobMaxResults {
 		matches = matches[:GlobMaxResults]
 		truncated = true
 	}
@@ -129,7 +132,7 @@ func (GlobTool) Execute(_ context.Context, _ string, input map[string]any) (stri
 		return fmt.Sprintf("(no matches for %q under %s)", pattern, absRoot), nil
 	}
 	if truncated {
-		fmt.Fprintf(&out, "\n[truncated to first %d of %d+ matches]\n", GlobMaxResults, GlobMaxResults)
+		fmt.Fprintf(&out, "\n[truncated to first %d of %d matches]\n", GlobMaxResults, totalMatches)
 	}
 	return out.String(), nil
 }

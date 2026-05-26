@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,11 @@ func (WebFetchTool) Execute(ctx context.Context, _ string, input map[string]any)
 		return "", fmt.Errorf("web_fetch: only http/https URLs are allowed (got %q)", u.Scheme)
 	}
 
+	// Jina's contract is literal string concatenation: r.jina.ai/<rest>.
+	// Do NOT QueryEscape — Jina parses the rest-of-path itself, and
+	// escaping breaks routing. A `#fragment` in raw is technically lost
+	// here (Jina won't see it), but fragments are never sent to servers
+	// anyway, so this matches normal HTTP semantics.
 	jinaURL := jinaReaderHostForTest + raw
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -101,16 +107,9 @@ func (WebFetchTool) Execute(ctx context.Context, _ string, input map[string]any)
 
 	out := string(body)
 	if truncated {
-		out += "\n\n…[truncated at " + strconvItoa(WebFetchMaxBytes) + " bytes]"
+		out += "\n\n…[truncated at " + strconv.Itoa(WebFetchMaxBytes) + " bytes]"
 	}
 	return out, nil
-}
-
-// strconvItoa is a tiny local alias to avoid adding an import just for one
-// integer-to-string call in the truncation message. (Same as strconv.Itoa.)
-func strconvItoa(n int) string {
-	// fmt.Sprintf is fine; the simplicity beats a manual loop here.
-	return fmt.Sprintf("%d", n)
 }
 
 // webHTTPClient is the shared http.Client used by web_fetch and the

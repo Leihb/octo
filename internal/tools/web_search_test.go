@@ -34,7 +34,9 @@ func clearSearchEnv(t *testing.T) {
 // from an earlier test. Without this, the second test in a run can
 // skip DDG and silently fail the assertion.
 func resetDDGCooldown() {
-	ddgUnavailableUntil = time.Time{}
+	ddgCooldown.mu.Lock()
+	ddgCooldown.until = time.Time{}
+	ddgCooldown.mu.Unlock()
 }
 
 func TestWebSearch_BravePreferred(t *testing.T) {
@@ -281,5 +283,59 @@ func TestStripHTML(t *testing.T) {
 	want := "Hello & world 'quoted'"
 	if got != want {
 		t.Errorf("stripHTML = %q, want %q", got, want)
+	}
+}
+
+func TestDDGCooldown_ConcurrentSafeUnderRace(t *testing.T) {
+	// Reproducer for the data race on ddgCooldown that earlier lived as
+	// an unsynced package-level time.Time. Run under `go test -race ./...`;
+	// without the mutex, this fails because of concurrent read+write.
+	clearSearchEnv(t)
+	resetDDGCooldown()
+	t.Cleanup(resetDDGCooldown)
+
+	// Pin DDG and Bing at a server that always 500s so both backends fail
+	// and the loop hits the cooldown write path.
+	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	defer fail.Close()
+	swapEndpoint(t, &ddgEndpoint, fail.URL)
+	swapEndpoint(t, &bingEndpoint, fail.URL)
+
+	const goroutines = 16
+	done := make(chan struct{}, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			_, _ = WebSearchTool{}.Execute(context.Background(), "web_search", map[string]any{"query": "x"})
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}
+
+func TestParseBingHTML_NestedLi_KnownLimitation(t *testing.T) {
+	// Locks in the documented LIMITATION on bingBlockRE: a nested `<li>`
+	// inside a b_algo block truncates the captured block. The expected
+	// behavior today is that the truncated block is silently dropped
+	// (title regex misses), so the test asserts an EMPTY result set.
+	// When this regex is rewritten with a real HTML tokenizer, this test
+	// should flip — leave a clear breadcrumb here so the next maintainer
+	// knows what changed.
+	html := `
+		<html><body>
+			<li class="b_algo">
+				<ul><li>nested sitelink</li></ul>
+				<h2><a href="https://example.com/page">Real Title</a></h2>
+				<p class="b_lineclamp2">Real snippet.</p>
+			</li>
+		</body></html>
+	`
+	got := parseBingHTML(html, 5)
+	if len(got) != 0 {
+		t.Errorf("nested-<li> currently truncates parsing; expected 0 results, got %d: %+v", len(got), got)
+		t.Logf("If this test starts failing because the parser now returns 1, the limitation has been fixed — update the test and remove the LIMITATION comment in web_search.go.")
 	}
 }

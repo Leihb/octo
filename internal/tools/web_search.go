@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Leihb/octo-agent/internal/agent"
@@ -145,6 +146,9 @@ func (WebSearchTool) Execute(ctx context.Context, _ string, input map[string]any
 			lastErr = fmt.Errorf("%s: zero results", b.name)
 			continue
 		}
+		// Belt-and-suspenders: every backend already self-limits to `max`
+		// (API `count` param or parser cap), but if a future backend ever
+		// drifts, this stops oversize responses from leaking through.
 		if len(results) > max {
 			results = results[:max]
 		}
@@ -156,7 +160,13 @@ func (WebSearchTool) Execute(ctx context.Context, _ string, input map[string]any
 	}
 
 	if !succeeded {
-		response.Error = fmt.Sprintf("all backends failed (last error: %v)", lastErr)
+		if lastErr != nil {
+			response.Error = fmt.Sprintf("all backends failed (last error: %v)", lastErr)
+		} else {
+			// No backend ran at all — only reachable if both fallbacks are
+			// somehow stripped from the chain in the future.
+			response.Error = "no search backend available"
+		}
 	}
 
 	body, err := json.MarshalIndent(response, "", "  ")
@@ -310,7 +320,7 @@ func browserGet(ctx context.Context, target string, followRedirects int) (*http.
 
 	client := &http.Client{
 		Timeout:       12 * time.Second,
-		CheckRedirect: func(req *http.Request, via []via) error { return http.ErrUseLastResponse },
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -350,29 +360,45 @@ func browserGet(ctx context.Context, target string, followRedirects int) (*http.
 	return resp, nil
 }
 
-// `via` is a stub type used to satisfy the http.Client.CheckRedirect
-// signature even though we handle redirects manually. Aliasing
-// `[]*http.Request` keeps the closure tidy.
-type via = *http.Request
+// ddgCooldown coordinates the DuckDuckGo cooldown across concurrent
+// callers. Without the mutex, two goroutines racing the package-level
+// time.Time would tear (it's a multi-word struct in Go's runtime). M8's
+// web server is the first place where concurrent searches become
+// routine; fix here so the bug doesn't ship there.
+var ddgCooldown struct {
+	mu    sync.RWMutex
+	until time.Time
+}
 
-// ddgUnavailableUntil suppresses DDG attempts after a recent failure to
-// avoid hammering it when it's clearly down. Per-process state — resets
-// on restart. 10-minute cooldown matches what the Ruby reference used.
-var ddgUnavailableUntil time.Time
+// markDDGUnavailable parks DDG attempts for the given duration. Safe to
+// call concurrently.
+func markDDGUnavailable(d time.Duration) {
+	ddgCooldown.mu.Lock()
+	ddgCooldown.until = time.Now().Add(d)
+	ddgCooldown.mu.Unlock()
+}
+
+// ddgCoolingDownUntil returns the cooldown deadline (zero if not cooling).
+// Safe to call concurrently.
+func ddgCoolingDownUntil() time.Time {
+	ddgCooldown.mu.RLock()
+	defer ddgCooldown.mu.RUnlock()
+	return ddgCooldown.until
+}
 
 func searchDuckDuckGo(ctx context.Context, query string, max int) ([]WebSearchResult, error) {
-	if time.Now().Before(ddgUnavailableUntil) {
-		return nil, fmt.Errorf("duckduckgo: skipped (cooling down until %s)", ddgUnavailableUntil.Format(time.Kitchen))
+	if until := ddgCoolingDownUntil(); time.Now().Before(until) {
+		return nil, fmt.Errorf("duckduckgo: skipped (cooling down until %s)", until.Format(time.Kitchen))
 	}
 	endpoint := ddgEndpoint + "?q=" + url.QueryEscape(query)
 	resp, err := browserGet(ctx, endpoint, 1)
 	if err != nil {
-		ddgUnavailableUntil = time.Now().Add(10 * time.Minute)
+		markDDGUnavailable(10 * time.Minute)
 		return nil, fmt.Errorf("duckduckgo: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		ddgUnavailableUntil = time.Now().Add(10 * time.Minute)
+		markDDGUnavailable(10 * time.Minute)
 		return nil, fmt.Errorf("duckduckgo: HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
@@ -431,6 +457,14 @@ func searchBing(ctx context.Context, query string, max int) ([]WebSearchResult, 
 }
 
 // Bing result blocks: <li class="b_algo"> … </li>
+//
+// LIMITATION: the non-greedy `</li>` stops at the FIRST closing tag, so if
+// Bing ever nests a `<li>` inside a `b_algo` (e.g. site-link clusters,
+// FAQ accordions) the captured block will be truncated and parsing of
+// that block silently drops it (no title match → skip at the caller).
+// Today's Bing HTML doesn't trip this; if results start unexpectedly
+// vanishing, this is the first place to look. A net/html tokenizer
+// rewrite is the proper fix and is out of scope here.
 var bingBlockRE = regexp.MustCompile(`(?s)<li[^>]*class="b_algo"[^>]*>(.*?)</li>`)
 var bingTitleRE = regexp.MustCompile(`(?s)<h2[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>`)
 var bingLineclampRE = regexp.MustCompile(`(?s)<p[^>]*class="b_lineclamp[^"]*"[^>]*>(.*?)</p>`)
@@ -464,17 +498,19 @@ func parseBingHTML(body string, max int) []WebSearchResult {
 // The "u" param is "a1" prefix + URL-safe base64 (without padding) of the
 // real URL. Decode failures fall back to the wrapper URL — never let a
 // single broken link kill the whole result set.
+//
+// Parsing uses net/url so a `#` fragment or any future query-string oddity
+// doesn't trip us up (previous hand-rolled split would mistakenly bake
+// `#frag` into the encoded payload and base64-fail).
 func decodeBingURL(wrapped string) string {
 	if !strings.Contains(wrapped, "bing.com/ck/") {
 		return wrapped
 	}
-	uVal := ""
-	for _, kv := range strings.Split(strings.TrimLeft(wrapped[strings.Index(wrapped, "?")+1:], "?"), "&") {
-		if strings.HasPrefix(kv, "u=") {
-			uVal = strings.TrimPrefix(kv, "u=")
-			break
-		}
+	u, err := url.Parse(wrapped)
+	if err != nil {
+		return wrapped
 	}
+	uVal := u.Query().Get("u")
 	if uVal == "" || !strings.HasPrefix(uVal, "a1") {
 		return wrapped
 	}
