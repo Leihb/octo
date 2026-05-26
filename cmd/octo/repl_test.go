@@ -202,7 +202,7 @@ func TestREPL_ResumedSessionShowsTurnCount(t *testing.T) {
 
 func TestREPLToolEventHandler_TextOnly(t *testing.T) {
 	var buf bytes.Buffer
-	h := replToolEventHandler(&buf)
+	h := replToolEventHandler(&buf, false)
 	h(agent.AgentEvent{Kind: agent.EventTextDelta, Text: "hello"})
 	h(agent.AgentEvent{Kind: agent.EventTextDelta, Text: " world"})
 	if got := buf.String(); got != "hello world" {
@@ -212,7 +212,7 @@ func TestREPLToolEventHandler_TextOnly(t *testing.T) {
 
 func TestREPLToolEventHandler_ToolStartedAndDone(t *testing.T) {
 	var buf bytes.Buffer
-	h := replToolEventHandler(&buf)
+	h := replToolEventHandler(&buf, false)
 	h(agent.AgentEvent{Kind: agent.EventTextDelta, Text: "Running now..."})
 	h(agent.AgentEvent{
 		Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "terminal",
@@ -237,7 +237,7 @@ func TestREPLToolEventHandler_ToolStartedAndDone(t *testing.T) {
 
 func TestREPLToolEventHandler_ToolError(t *testing.T) {
 	var buf bytes.Buffer
-	h := replToolEventHandler(&buf)
+	h := replToolEventHandler(&buf, false)
 	h(agent.AgentEvent{
 		Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "write_file",
 		Input: map[string]any{"path": "/etc/passwd"},
@@ -260,7 +260,7 @@ func TestREPLToolEventHandler_TurnDoneSilent(t *testing.T) {
 	// its own trailing newline. This test locks that in so a well-meaning
 	// future change doesn't accidentally double-print.
 	var buf bytes.Buffer
-	h := replToolEventHandler(&buf)
+	h := replToolEventHandler(&buf, false)
 	reply := agent.Reply{Content: "all done"}
 	h(agent.AgentEvent{Kind: agent.EventTurnDone, Reply: &reply})
 	if buf.Len() != 0 {
@@ -287,5 +287,59 @@ func TestTruncate1Line_CollapsesMultiline(t *testing.T) {
 	got := truncate1Line("\n\nfirst real line\nsecond line that gets dropped")
 	if got != "first real line" {
 		t.Errorf("truncate1Line = %q", got)
+	}
+}
+
+func TestREPLToolEventHandler_EditFileRendersCard(t *testing.T) {
+	// edit_file should produce a diff card on tool_done, NOT the terse
+	// ↳ status line, and the started event should be silent.
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, false)
+	input := map[string]any{
+		"path":       "/tmp/nope-this-file-does-not-exist.go",
+		"old_string": "alpha",
+		"new_string": "beta",
+	}
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "edit_file", Input: input})
+	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "edit_file"})
+
+	out := buf.String()
+	if strings.Contains(out, "↳ edit_file:") {
+		t.Errorf("started ↳ line should be suppressed for edit_file in card mode:\n%s", out)
+	}
+	if strings.Contains(out, "↳ edit_file ✓") {
+		t.Errorf("done ↳ line should be suppressed for edit_file in card mode:\n%s", out)
+	}
+	if !strings.Contains(out, "Update(") {
+		t.Errorf("expected card header with Update(path):\n%s", out)
+	}
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
+		t.Errorf("expected old_string and new_string in card body:\n%s", out)
+	}
+}
+
+func TestREPLToolEventHandler_PlainForcesEditFileToStatusLine(t *testing.T) {
+	// With plain=true, even edit_file should use the ↳ status path so
+	// users on constrained terminals (no truecolor, log scraping, etc.)
+	// get the terse output.
+	var buf bytes.Buffer
+	h := replToolEventHandler(&buf, true)
+	input := map[string]any{
+		"path":       "/tmp/whatever.go",
+		"old_string": "alpha",
+		"new_string": "beta",
+	}
+	h(agent.AgentEvent{Kind: agent.EventToolStarted, ToolID: "c1", ToolName: "edit_file", Input: input})
+	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "edit_file"})
+
+	out := buf.String()
+	if !strings.Contains(out, "↳ edit_file:") {
+		t.Errorf("plain mode should emit ↳ started line for edit_file:\n%s", out)
+	}
+	if !strings.Contains(out, "↳ edit_file ✓") {
+		t.Errorf("plain mode should emit ↳ done line for edit_file:\n%s", out)
+	}
+	if strings.Contains(out, "Update(") {
+		t.Errorf("plain mode should NOT render a card:\n%s", out)
 	}
 }

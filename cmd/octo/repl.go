@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/tui"
 )
 
 // replConfig holds everything runREPL needs.
@@ -17,6 +18,7 @@ type replConfig struct {
 	a        *agent.Agent
 	session  *agent.Session
 	noSave   bool
+	plain    bool // true → fall back to terse ↳ status lines for all tool events
 	stdin    io.Reader
 	stdout   io.Writer
 	stderr   io.Writer
@@ -101,7 +103,7 @@ func runREPL(cfg replConfig) int {
 			// stdout, etc.) is conversational state for the LLM, not user-
 			// facing chrome. EventTurnDone is also silent; the trailing
 			// newline below marks the visible turn boundary.
-			reply, err = a.RunStream(context.Background(), line, cfg.tools, cfg.executor, replToolEventHandler(cfg.stdout))
+			reply, err = a.RunStream(context.Background(), line, cfg.tools, cfg.executor, replToolEventHandler(cfg.stdout, cfg.plain))
 		} else {
 			reply, err = a.TurnStream(context.Background(), line, func(delta string) {
 				fmt.Fprint(cfg.stdout, delta)
@@ -197,9 +199,12 @@ func printSessions(w io.Writer) error {
 // newline before the FIRST status line of a turn — without it the marker
 // would butt up against the trailing character of the assistant's
 // "I'll now run terminal..." sentence.
-func replToolEventHandler(stdout io.Writer) func(agent.AgentEvent) {
+func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 	// Per-tool-call start times so EventToolDone can report elapsed.
 	startedAt := make(map[string]time.Time)
+	// Cache the input from tool_started so the corresponding tool_done can
+	// render a card without depending on the executor surfacing it back.
+	startedInput := make(map[string]map[string]any)
 	// Track whether the previous event was a text delta — if so, a tool
 	// status line needs a leading newline to start cleanly.
 	prevWasText := false
@@ -216,28 +221,69 @@ func replToolEventHandler(stdout io.Writer) func(agent.AgentEvent) {
 				prevWasText = false
 			}
 			startedAt[ev.ToolID] = time.Now()
+			startedInput[ev.ToolID] = ev.Input
+			// Tools that render a card on EventToolDone suppress the leading
+			// status line so the card stands on its own.
+			if rendersAsCard(ev.ToolName, plain) {
+				return
+			}
 			fmt.Fprintf(stdout, "↳ %s: %s\n", ev.ToolName, summariseInput(ev.Input))
 
 		case agent.EventToolDone:
-			elapsed := ""
+			elapsed := time.Duration(0)
 			if t, ok := startedAt[ev.ToolID]; ok {
-				elapsed = fmt.Sprintf(" (%s)", time.Since(t).Round(time.Millisecond))
+				elapsed = time.Since(t).Round(time.Millisecond)
 				delete(startedAt, ev.ToolID)
 			}
-			fmt.Fprintf(stdout, "↳ %s ✓%s\n", ev.ToolName, elapsed)
+			input := startedInput[ev.ToolID]
+			delete(startedInput, ev.ToolID)
+
+			if rendersAsCard(ev.ToolName, plain) {
+				fmt.Fprintln(stdout, renderToolCard(ev.ToolName, input))
+				return
+			}
+			fmt.Fprintf(stdout, "↳ %s ✓ (%s)\n", ev.ToolName, elapsed)
 
 		case agent.EventToolError:
-			elapsed := ""
+			elapsed := time.Duration(0)
 			if t, ok := startedAt[ev.ToolID]; ok {
-				elapsed = fmt.Sprintf(" (%s)", time.Since(t).Round(time.Millisecond))
+				elapsed = time.Since(t).Round(time.Millisecond)
 				delete(startedAt, ev.ToolID)
 			}
-			fmt.Fprintf(stdout, "↳ %s ✗%s — %s\n", ev.ToolName, elapsed, truncate1Line(ev.Err))
+			delete(startedInput, ev.ToolID)
+			fmt.Fprintf(stdout, "↳ %s ✗ (%s) — %s\n", ev.ToolName, elapsed, truncate1Line(ev.Err))
 
 			// EventTurnDone is silent — the trailing newline emitted by the
 			// REPL loop after RunStream returns serves as the turn boundary.
 		}
 	}
+}
+
+// rendersAsCard reports whether a tool's events should be rendered as a
+// rich diff/result card (true) or as a terse `↳ status` line (false).
+// The set is intentionally small — only edit_file today.
+func rendersAsCard(toolName string, plain bool) bool {
+	if plain {
+		return false
+	}
+	switch toolName {
+	case "edit_file":
+		return true
+	}
+	return false
+}
+
+// renderToolCard dispatches to the per-tool card renderer. Returns the
+// fully-rendered, ANSI-coloured card as a string with no trailing newline.
+func renderToolCard(toolName string, input map[string]any) string {
+	switch toolName {
+	case "edit_file":
+		path, _ := input["path"].(string)
+		oldStr, _ := input["old_string"].(string)
+		newStr, _ := input["new_string"].(string)
+		return tui.RenderEditCard(path, oldStr, newStr)
+	}
+	return ""
 }
 
 // summariseInput renders a short single-line description of the tool's input

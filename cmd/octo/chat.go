@@ -54,6 +54,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	noSave := fs.Bool("no-save", false, "Disable auto-save in REPL mode")
 	listSessions := fs.Bool("list-sessions", false, "Print the 10 most recent sessions and exit")
 	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
+	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -141,6 +142,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			a:       a,
 			session: sess,
 			noSave:  *noSave,
+			plain:   *plain,
 			stdin:   stdin,
 			stdout:  stdout,
 			stderr:  stderr,
