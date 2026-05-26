@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -371,17 +372,26 @@ func expandCWD(pat, cwd string) string {
 	return pat
 }
 
-// absPath resolves rel against cwd if it isn't already absolute. Symlink
-// expansion is intentionally NOT performed — we want rules to match the
-// path the user/LLM typed, not its canonical form, so a rule like
-// `deny: /etc/**` blocks an attempt to write `/etc/passwd` via a
-// symlink-traversal trick (the deny would still apply via the literal
-// path, even though the underlying file is elsewhere).
+// absPath resolves rel against cwd if it isn't already absolute. Output
+// is always slash-separated regardless of host OS, so rule patterns
+// (which are always written with `/`) match consistently on Windows.
+//
+// Symlink expansion is intentionally NOT performed — we want rules to
+// match the path the user/LLM typed, not its canonical form, so a rule
+// like `deny: /etc/**` blocks an attempt to write `/etc/passwd` via a
+// symlink-traversal trick (the deny still applies on the literal path,
+// even though the underlying file is elsewhere).
 func absPath(rel, cwd string) string {
-	if filepath.IsAbs(rel) {
-		return filepath.Clean(rel)
+	rel = filepath.ToSlash(rel)
+	cwd = filepath.ToSlash(cwd)
+	// Windows drive-letter absolute (`C:/...`).
+	if len(rel) >= 3 && rel[1] == ':' && rel[2] == '/' {
+		return path.Clean(rel)
 	}
-	return filepath.Clean(filepath.Join(cwd, rel))
+	if path.IsAbs(rel) {
+		return path.Clean(rel)
+	}
+	return path.Clean(cwd + "/" + rel)
 }
 
 // stringifyInput renders input map values as a single space-joined
