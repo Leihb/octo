@@ -147,7 +147,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		if *enableTools {
 			cfg.tools = tools.DefaultTools()
-			cfg.executor = tools.RegistryWithBash{}
+			cfg.executor = tools.DefaultRegistry{}
 		}
 		return runREPL(cfg)
 	}
