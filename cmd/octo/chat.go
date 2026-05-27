@@ -66,6 +66,10 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	compactThreshold := fs.Int("compact-threshold", 0, "Compact older history once a turn's input crosses this many tokens; 0 = auto (~75% of the model's context window), <0 = disabled")
 	thinkingBudget := fs.Int("thinking-budget", 0, "Enable extended thinking with this token budget (Anthropic/Kimi); 0 = off")
 	useSandbox := fs.Bool("sandbox", false, "Confine terminal commands to the project dir + tmp with no network (OS-enforced; macOS/Linux). Fails closed if unavailable.")
+	sandboxAllowNet := fs.Bool("sandbox-allow-net", false, "Under --sandbox, permit network access (default: denied)")
+	var sandboxWrite, sandboxRead stringList
+	fs.Var(&sandboxWrite, "sandbox-write", "Under --sandbox, an extra writable directory (repeatable)")
+	fs.Var(&sandboxRead, "sandbox-read", "Under --sandbox, an extra read-only directory (repeatable)")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -140,7 +144,8 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	env := buildEnvContext(cwd)
 
 	if *useSandbox {
-		if err := activateSandbox(cwd, stderr); err != nil {
+		opts := sandboxOpts{allowNet: *sandboxAllowNet, writeRoots: sandboxWrite, readRoots: sandboxRead}
+		if err := activateSandbox(cwd, opts, stderr); err != nil {
 			return 1
 		}
 	}

@@ -39,6 +39,10 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
 	permMode := fs.String("permission-mode", "strict", "Tool permission handling: interactive | strict")
 	useSandbox := fs.Bool("sandbox", false, "Confine commands to the project dir + tmp with no network (OS-enforced; macOS/Linux). Fails closed if unavailable.")
+	sandboxAllowNet := fs.Bool("sandbox-allow-net", false, "Under --sandbox, permit network access (default: denied)")
+	var sandboxWrite, sandboxRead stringList
+	fs.Var(&sandboxWrite, "sandbox-write", "Under --sandbox, an extra writable directory (repeatable)")
+	fs.Var(&sandboxRead, "sandbox-read", "Under --sandbox, an extra read-only directory (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -65,7 +69,8 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	env := buildEnvContext(cwd)
 
 	if *useSandbox {
-		if err := activateSandbox(cwd, stderr); err != nil {
+		opts := sandboxOpts{allowNet: *sandboxAllowNet, writeRoots: sandboxWrite, readRoots: sandboxRead}
+		if err := activateSandbox(cwd, opts, stderr); err != nil {
 			return 1
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,29 @@ func run(t *testing.T, cwd, command string, p Policy) error {
 	out, runErr := cmd.CombinedOutput()
 	t.Logf("command %q → err=%v out=%s", command, runErr, out)
 	return runErr
+}
+
+func TestBuildProfile_NetworkToggle(t *testing.T) {
+	if got := buildProfile(Policy{}); !strings.Contains(got, "(deny network*)") {
+		t.Errorf("AllowNetwork=false profile should deny network:\n%s", got)
+	}
+	if got := buildProfile(Policy{AllowNetwork: true}); strings.Contains(got, "(deny network*)") {
+		t.Errorf("AllowNetwork=true profile should NOT deny network:\n%s", got)
+	}
+}
+
+func TestBuildProfile_IncludesConfiguredRoots(t *testing.T) {
+	p := Policy{
+		WriteRoots: []string{"/srv/extra-write"},
+		ReadRoots:  []string{"/srv/extra-read"},
+	}
+	got := buildProfile(p)
+	if !strings.Contains(got, "/srv/extra-write") {
+		t.Errorf("profile should grant the configured write root:\n%s", got)
+	}
+	if !strings.Contains(got, "/srv/extra-read") {
+		t.Errorf("profile should grant the configured read root:\n%s", got)
+	}
 }
 
 func TestSandbox_FilesystemBoundary(t *testing.T) {
