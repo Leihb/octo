@@ -868,3 +868,149 @@ func TestAgent_RunStream_NilHandler_TolerantOfInputDeltas(t *testing.T) {
 		t.Fatalf("RunStream(nil handler): %v", err)
 	}
 }
+
+// ─── PermissionGate tests ──────────────────────────────────────────────────
+
+// fakeGate implements PermissionGate. allow controls the verdict; denied
+// records the calls that were rejected.
+type fakeGate struct {
+	allow  bool
+	reason string
+	checks []string // tool names the gate was asked about
+}
+
+func (g *fakeGate) Check(_ context.Context, name string, _ map[string]any) (bool, string) {
+	g.checks = append(g.checks, name)
+	return g.allow, g.reason
+}
+
+func TestAgent_Run_GateDenies_ToolNotExecuted(t *testing.T) {
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks: []ContentBlock{
+					NewToolUseBlock("c1", "terminal", map[string]any{"command": "rm -rf /"}),
+				},
+			},
+			{Content: "understood, I won't do that", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{}
+	gate := &fakeGate{allow: false, reason: "permission_denied: terminal rm -rf"}
+
+	a := New(send, "m")
+	a.Gate = gate
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	reply, err := a.Run(context.Background(), "delete everything", defs, exec)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Executor must NOT have run.
+	if len(exec.called) != 0 {
+		t.Errorf("denied tool should not execute; called=%v", exec.called)
+	}
+	// Gate was consulted for the terminal call.
+	if len(gate.checks) != 1 || gate.checks[0] != "terminal" {
+		t.Errorf("gate checks = %v", gate.checks)
+	}
+	if reply.Content != "understood, I won't do that" {
+		t.Errorf("Content = %q", reply.Content)
+	}
+
+	// The denial reason should be in the tool_result fed back to the LLM.
+	snap := a.History.Snapshot()
+	var foundReason bool
+	for _, m := range snap {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_result" && b.IsError && b.Result == "permission_denied: terminal rm -rf" {
+				foundReason = true
+			}
+		}
+	}
+	if !foundReason {
+		t.Errorf("denial reason not found in tool_result history: %+v", snap)
+	}
+}
+
+func TestAgent_Run_GateAllows_ToolExecutes(t *testing.T) {
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks:     []ContentBlock{NewToolUseBlock("c1", "terminal", map[string]any{"command": "ls"})},
+			},
+			{Content: "done", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{results: map[string]string{"terminal": "file1\nfile2"}}
+	gate := &fakeGate{allow: true}
+
+	a := New(send, "m")
+	a.Gate = gate
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	if _, err := a.Run(context.Background(), "list files", defs, exec); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(exec.called) != 1 || exec.called[0] != "terminal" {
+		t.Errorf("allowed tool should execute once; called=%v", exec.called)
+	}
+}
+
+func TestAgent_Run_NilGate_AllToolsExecute(t *testing.T) {
+	// Backward compatibility: no gate set → tools run as before.
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks:     []ContentBlock{NewToolUseBlock("c1", "terminal", nil)},
+			},
+			{Content: "done", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{}
+	a := New(send, "m") // a.Gate == nil
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	if _, err := a.Run(context.Background(), "go", defs, exec); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(exec.called) != 1 {
+		t.Errorf("nil gate should allow execution; called=%v", exec.called)
+	}
+}
+
+func TestAgent_RunStream_GateDenies_EmitsErrorEvent(t *testing.T) {
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason: "tool_use",
+				Blocks:     []ContentBlock{NewToolUseBlock("c1", "terminal", map[string]any{"command": "sudo rm"})},
+			},
+			{Content: "ok", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{}
+	gate := &fakeGate{allow: false, reason: "blocked by policy"}
+	a := New(send, "m")
+	a.Gate = gate
+	defs := []ToolDefinition{{Name: "terminal"}}
+
+	var sawError bool
+	_, err := a.RunStream(context.Background(), "go", defs, exec, func(ev AgentEvent) {
+		if ev.Kind == EventToolError && ev.Err == "blocked by policy" {
+			sawError = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if len(exec.called) != 0 {
+		t.Errorf("denied tool should not execute; called=%v", exec.called)
+	}
+	if !sawError {
+		t.Errorf("expected EventToolError carrying the denial reason")
+	}
+}

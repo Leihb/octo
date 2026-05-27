@@ -10,20 +10,22 @@ import (
 	"time"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/tui"
 )
 
 // replConfig holds everything runREPL needs.
 type replConfig struct {
-	a        *agent.Agent
-	session  *agent.Session
-	noSave   bool
-	plain    bool // true → fall back to terse ↳ status lines for all tool events
-	stdin    io.Reader
-	stdout   io.Writer
-	stderr   io.Writer
-	tools    []agent.ToolDefinition
-	executor agent.ToolExecutor
+	a          *agent.Agent
+	session    *agent.Session
+	noSave     bool
+	plain      bool               // true → fall back to terse ↳ status lines for all tool events
+	permEngine *permission.Engine // nil → no tool-permission gating
+	stdin      io.Reader
+	stdout     io.Writer
+	stderr     io.Writer
+	tools      []agent.ToolDefinition
+	executor   agent.ToolExecutor
 }
 
 // runREPL runs the interactive multi-turn loop until the user exits or EOF.
@@ -46,6 +48,19 @@ func runREPL(cfg replConfig) int {
 	fmt.Fprintln(cfg.stdout)
 
 	scanner := bufio.NewScanner(cfg.stdin)
+
+	// Permission gating shares the REPL scanner so an interactive "ask"
+	// prompt reads from the same stdin buffer the loop uses. Tool dispatch
+	// runs synchronously inside RunStream (which blocks this loop), so there
+	// is no concurrent access to the scanner.
+	if cfg.permEngine != nil {
+		a.Gate = &cliPermissionGate{
+			engine: cfg.permEngine,
+			in:     scanner,
+			out:    cfg.stdout,
+		}
+	}
+
 	for {
 		fmt.Fprint(cfg.stdout, "you> ")
 

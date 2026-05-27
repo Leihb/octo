@@ -18,6 +18,24 @@ type ToolExecutor interface {
 	Execute(ctx context.Context, name string, input map[string]any) (string, error)
 }
 
+// PermissionGate decides whether a tool call may proceed. The agent loop
+// consults the gate (if one is set on the Agent) immediately before
+// executing each tool_use block. A denied call never reaches the executor;
+// instead the loop synthesises a tool_result with IsError=true carrying the
+// reason, so the LLM sees the denial and can adapt (suggest an alternative,
+// ask the user to whitelist, etc.) rather than the run aborting.
+//
+// Implementations own the interaction model for "ask" decisions: a CLI gate
+// prompts the user synchronously, while a non-interactive (server / IM) gate
+// resolves ask → deny. The agent package stays ignorant of how the decision
+// is reached — it only sees the final allow/deny.
+type PermissionGate interface {
+	// Check reports whether the named tool call may run. reason is a
+	// human/LLM-readable explanation, surfaced in the tool_result when
+	// allowed is false; it may be empty when allowed is true.
+	Check(ctx context.Context, name string, input map[string]any) (allowed bool, reason string)
+}
+
 // StreamingToolExecutor is an optional extension to ToolExecutor: tools that
 // produce incremental output (e.g. a long shell command writing stdout line
 // by line) can implement ExecuteStream and surface chunks as they happen.

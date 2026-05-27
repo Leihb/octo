@@ -102,6 +102,10 @@ type Agent struct {
 	History   *History
 	Sender    Sender
 
+	// Gate, when non-nil, vets every tool call before execution. A nil
+	// Gate means no gating — all tool calls run (the pre-M6.5 behaviour).
+	Gate PermissionGate
+
 	// Cumulative token counts for this session (all turns combined).
 	sessionInputTokens  int
 	sessionOutputTokens int
@@ -258,7 +262,7 @@ func (a *Agent) Run(ctx context.Context, userInput string, tools []ToolDefinitio
 			// Run.runner doesn't carry a handler — progress events would
 			// have nowhere to go. Pass nil; dispatchTools degrades to the
 			// non-streaming path automatically.
-			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks, nil)
+			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks, nil, a.Gate)
 			if err != nil {
 				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
 			}
@@ -401,7 +405,7 @@ func (a *Agent) runStreamLoop(
 			// handler is threaded through to dispatchTools so streaming
 			// tools (StreamingToolExecutor) can fire EventToolProgress as
 			// output arrives mid-execution.
-			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks, handler)
+			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks, handler, a.Gate)
 			if err != nil {
 				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
 			}
@@ -494,13 +498,29 @@ func emitToolResultEvents(handler EventHandler, useBlocks, resultBlocks []Conten
 // handler may be nil — in that case progress events are dropped and even a
 // streaming executor effectively runs in non-streaming mode (the aggregated
 // output is still what lands in the tool_result block).
-func dispatchTools(ctx context.Context, executor ToolExecutor, blocks []ContentBlock, handler EventHandler) ([]ContentBlock, error) {
+//
+// gate may be nil — no permission gating. When non-nil, each tool call is
+// vetted before execution; a denied call is turned into an IsError
+// tool_result carrying the gate's reason and the executor is never invoked.
+func dispatchTools(ctx context.Context, executor ToolExecutor, blocks []ContentBlock, handler EventHandler, gate PermissionGate) ([]ContentBlock, error) {
 	streaming, hasStreaming := executor.(StreamingToolExecutor)
 
 	var results []ContentBlock
 	for _, b := range blocks {
 		if b.Type != "tool_use" {
 			continue
+		}
+
+		// Permission gate: a denial short-circuits execution and feeds the
+		// reason back to the LLM as an error result.
+		if gate != nil {
+			if allowed, reason := gate.Check(ctx, b.Name, b.Input); !allowed {
+				if reason == "" {
+					reason = "permission denied"
+				}
+				results = append(results, NewToolResultBlock(b.ID, reason, true))
+				continue
+			}
 		}
 
 		var (

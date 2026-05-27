@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/provider"
 	"github.com/Leihb/octo-agent/internal/provider/anthropic"
 	"github.com/Leihb/octo-agent/internal/provider/openai"
@@ -55,8 +56,18 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	listSessions := fs.Bool("list-sessions", false, "Print the 10 most recent sessions and exit")
 	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
+	permMode := fs.String("permission-mode", "interactive", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask)")
 
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	// Validate --permission-mode up front. Fail closed on a typo rather than
+	// silently falling back to the more-permissive interactive mode — a user
+	// who asked for "strict" and got "interactive" by typo is a security
+	// regression, not a convenience.
+	if *permMode != string(permission.ModeInteractive) && *permMode != string(permission.ModeStrict) {
+		fmt.Fprintf(stderr, "octo chat: invalid --permission-mode %q (want 'interactive' or 'strict')\n", *permMode)
 		return 2
 	}
 
@@ -150,6 +161,15 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if *enableTools {
 			cfg.tools = tools.DefaultTools()
 			cfg.executor = tools.DefaultRegistry{}
+
+			// Build the permission engine that gates every tool call.
+			cwd, _ := os.Getwd()
+			engine, err := permission.New(permissionConfigPath(), cwd, resolvePermissionMode(*permMode))
+			if err != nil {
+				fmt.Fprintf(stderr, "octo chat: permission config: %v\n", err)
+				return 1
+			}
+			cfg.permEngine = engine
 		}
 		return runREPL(cfg)
 	}
