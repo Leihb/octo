@@ -26,26 +26,48 @@ var base string
 // follow (the human-facing counterpart to CLAUDE.md).
 const ProjectContextFile = ".octorules"
 
-// Compose assembles the session system prompt from up to four layers, in
-// order of increasing specificity:
+// maxIncludeDepth caps @include nesting so a deep (or accidentally recursive)
+// chain can't blow the stack or balloon the prompt. Cycles are caught
+// separately; this guards pathological-but-acyclic depth.
+const maxIncludeDepth = 5
+
+// userRulesPath returns the absolute path of the per-user global conventions
+// file (~/.octo/octorules.md) — the cross-project counterpart of the per-repo
+// ProjectContextFile. It's a var so tests can point it at a temp file. Returns
+// "" when the home directory can't be resolved.
+var userRulesPath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".octo", "octorules.md")
+}
+
+// Compose assembles the session system prompt from up to five layers, in order
+// of increasing specificity:
 //
 //  1. base    — embedded octo foundation (always present)
 //  2. env     — environment snapshot (cwd, git, date, OS) the caller renders
-//  3. project — ProjectContextFile in cwd, if present (repo conventions)
-//  4. user    — the --system value, if any (highest-priority override, last)
+//  3. user    — ~/.octo/octorules.md, if present (cross-project user rules)
+//  4. project — ProjectContextFile in cwd, if present (repo conventions)
+//  5. system  — the --system value, if any (highest-priority override, last)
 //
 // Empty layers are skipped. Later layers appear later in the text, which is
-// the conventional way to let more specific instructions take precedence.
+// the conventional way to let more specific instructions take precedence —
+// project rules override the user's global rules, and --system overrides all.
 //
-// env is passed in rather than computed here so this package stays pure (no
-// os/exec, no git). The caller takes a snapshot once at session start; since
-// the composed prompt is frozen for the session, a snapshot is correct and
-// keeps the cached prompt prefix stable across turns.
+// The user and project files may pull in other files with @include directives
+// (see expandIncludes). env is passed in rather than computed here so this
+// package stays pure (no os/exec, no git); the caller snapshots it once at
+// session start, which keeps the cached prompt prefix stable across turns.
 func Compose(userSystem, cwd, env string) string {
 	layers := []string{strings.TrimSpace(base)}
 
 	if e := strings.TrimSpace(env); e != "" {
 		layers = append(layers, e)
+	}
+	if u := readUserContext(); u != "" {
+		layers = append(layers, "# User conventions (~/.octo/octorules.md)\n\n"+u)
 	}
 	if proj := readProjectContext(cwd); proj != "" {
 		layers = append(layers, "# Project conventions ("+ProjectContextFile+")\n\n"+proj)
@@ -57,16 +79,110 @@ func Compose(userSystem, cwd, env string) string {
 	return strings.Join(layers, "\n\n---\n\n")
 }
 
-// readProjectContext returns the trimmed contents of ProjectContextFile in
-// cwd, or "" if it's absent/unreadable/empty. A missing file is not an error
-// — most directories won't have one.
+// readUserContext returns the trimmed, include-expanded contents of the
+// per-user global rules file, or "" if it's absent/unreadable/empty.
+func readUserContext() string {
+	p := userRulesPath()
+	if p == "" {
+		return ""
+	}
+	return readContextFile(p)
+}
+
+// readProjectContext returns the trimmed, include-expanded contents of
+// ProjectContextFile in cwd, or "" if it's absent/unreadable/empty. A missing
+// file is not an error — most directories won't have one.
 func readProjectContext(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	b, err := os.ReadFile(filepath.Join(cwd, ProjectContextFile))
+	return readContextFile(filepath.Join(cwd, ProjectContextFile))
+}
+
+// readContextFile reads a context file and expands its @include directives,
+// returning the trimmed result (or "" when the file is absent/unreadable).
+func readContextFile(path string) string {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(b))
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	// Seed the cycle set with the root file so it can't transitively include
+	// itself.
+	expanded := expandIncludes(string(b), filepath.Dir(abs), 0, map[string]bool{abs: true})
+	return strings.TrimSpace(expanded)
+}
+
+// expandIncludes inlines @include directives. A line whose first non-space
+// character is '@' is an include: the remainder (trimmed) is a file path,
+// resolved as ~/… (home), an absolute path, or relative to baseDir (the
+// directory of the file currently being expanded). The referenced file is
+// read and recursively expanded in place.
+//
+// Failures degrade to an inline HTML comment rather than aborting the prompt:
+//   - unreadable/missing →  <!-- missing include: PATH -->
+//   - already in the ancestor chain (cycle) →  <!-- include cycle: PATH -->
+//   - past maxIncludeDepth →  <!-- include depth exceeded: PATH -->
+//
+// seen tracks the current ancestor chain (added before recursing, removed
+// after) so a diamond include — the same file reached via two sibling
+// branches — is allowed, while a true cycle is not.
+func expandIncludes(content, baseDir string, depth int, seen map[string]bool) string {
+	var out strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) < 2 || trimmed[0] != '@' {
+			out.WriteString(line)
+			out.WriteByte('\n')
+			continue
+		}
+
+		raw := strings.TrimSpace(trimmed[1:])
+		resolved := resolveIncludePath(raw, baseDir)
+		abs, err := filepath.Abs(resolved)
+		if err != nil {
+			abs = resolved
+		}
+
+		switch {
+		case depth+1 > maxIncludeDepth:
+			out.WriteString("<!-- include depth exceeded: " + raw + " -->\n")
+			continue
+		case seen[abs]:
+			out.WriteString("<!-- include cycle: " + raw + " -->\n")
+			continue
+		}
+
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			out.WriteString("<!-- missing include: " + raw + " -->\n")
+			continue
+		}
+
+		seen[abs] = true
+		nested := expandIncludes(string(b), filepath.Dir(abs), depth+1, seen)
+		delete(seen, abs)
+
+		out.WriteString(strings.TrimRight(nested, "\n"))
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
+// resolveIncludePath turns an @include target into a filesystem path: ~/… is
+// expanded against the home dir, absolute paths pass through, and everything
+// else is taken relative to baseDir (the including file's directory).
+func resolveIncludePath(raw, baseDir string) string {
+	if raw == "~" || strings.HasPrefix(raw, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(raw, "~"), "/"))
+		}
+	}
+	if filepath.IsAbs(raw) {
+		return raw
+	}
+	return filepath.Join(baseDir, raw)
 }
