@@ -25,7 +25,7 @@ A+B 加固（#60–#65）之后，对标项基本落地完毕：
 
 附带落地：provider 流式/缓存修复(#72)、DeepSeek reasoning_content(#73)、Anthropic extended thinking(#74)、`octo init` / `/init`(#80)。
 
-**剩余**：C9（并入 M7）；沙箱默认开（待网络故事成熟后再议）。C11 网络故事 = `--sandbox-allow-net` 的 on/off 开关,主机白名单经评估后放弃。
+**剩余**：C9（并入 M7；Skill 加载器已落地 #87，typed memory 待单独一轮）。沙箱默认开**已决定不做**（2026-05-27）—— 保持 opt-in，按需 `--sandbox`，理由见 [`c11-sandbox-design.md`](c11-sandbox-design.md) §8。C11 网络故事 = `--sandbox-allow-net` 的 on/off 开关,主机白名单经评估后放弃。
 
 ---
 

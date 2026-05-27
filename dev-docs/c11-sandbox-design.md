@@ -188,10 +188,13 @@ default-off means normal use is unaffected. Revisit later if needed.
   toggle** (`--sandbox-allow-net`), which covers the practical safety need
   ("this task needs the network: on; otherwise off"). Revisit only if a concrete
   per-host requirement appears.
-- **Default-on:** deferred. Without a network allowlist, flipping `--sandbox`
+- **Default-on: not pursued (decided 2026-05-27).** Flipping `--sandbox`
   default-on would break every network-needing command (`go mod download`,
-  `git fetch`, …). Kept opt-in; the permission engine + strict mode remain the
-  always-on backstop.
+  `git fetch`, …), because the network story is an all-or-nothing toggle, not a
+  per-host allowlist. The sandbox stays **opt-in** — `--sandbox` on demand; the
+  permission engine + strict mode remain the always-on backstop. Not revisited
+  unless a fine-grained network boundary appears that would make a safe default
+  viable.
 
 ## 9. Testing
 
