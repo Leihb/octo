@@ -120,8 +120,16 @@ func runREPL(cfg replConfig) int {
 			continue
 		}
 
-		// Slash commands.
-		if strings.HasPrefix(line, "/") {
+		// /init runs the .octorules generator as a normal tool-enabled turn —
+		// swap in the init prompt and fall through to the turn machinery.
+		if line == "/init" {
+			if len(cfg.tools) == 0 || cfg.executor == nil {
+				fmt.Fprintln(cfg.stdout, "/init needs tools — restart with: octo chat --tools")
+				continue
+			}
+			fmt.Fprintln(cfg.stdout, "Analyzing the repository to generate .octorules…")
+			line = initInstruction
+		} else if strings.HasPrefix(line, "/") {
 			cmd := strings.ToLower(strings.Fields(line)[0])
 			switch cmd {
 			case "/exit", "/quit":
@@ -221,6 +229,7 @@ func runREPL(cfg replConfig) int {
 func printReplHelp(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  /help       Show this message")
+	fmt.Fprintln(w, "  /init       Analyze the repo and generate/update .octorules (needs --tools)")
 	fmt.Fprintln(w, "  /cost       Show token usage and estimated cost for this session")
 	fmt.Fprintln(w, "  /save       Save the session now (it also auto-saves after each turn)")
 	fmt.Fprintln(w, "  /sessions   List the 10 most recent sessions")

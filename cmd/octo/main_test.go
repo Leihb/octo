@@ -35,6 +35,27 @@ func TestRun_Version(t *testing.T) {
 	}
 }
 
+func TestRun_Usage_ListsInit(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	run(nil, strings.NewReader(""), &stdout, &stderr)
+	if !strings.Contains(stdout.String(), "init") {
+		t.Errorf("usage should list the init command; got: %q", stdout.String())
+	}
+}
+
+func TestRunInit_InvalidPermissionMode(t *testing.T) {
+	// Validation happens before any provider/network work, so this is
+	// deterministic and offline.
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"init", "--permission-mode", "bogus"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "permission-mode") {
+		t.Errorf("stderr should explain the bad permission-mode; got: %q", stderr.String())
+	}
+}
+
 func TestRun_UnknownCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"bogus"}, strings.NewReader(""), &stdout, &stderr)

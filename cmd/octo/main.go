@@ -38,6 +38,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "chat":
 		return runChat(args[1:], stdin, stdout, stderr)
+	case "init":
+		return runInit(args[1:], stdin, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "octo: unknown command %q\n", args[0])
 		fmt.Fprintln(stderr, "Run `octo help` for available commands.")
@@ -51,7 +53,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: octo <command>")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  chat       Send one message to Anthropic and print the reply")
+	fmt.Fprintln(w, "  chat       Start an interactive session (or single-turn with a message)")
+	fmt.Fprintln(w, "  init       Analyze the repo and generate/update .octorules")
 	fmt.Fprintln(w, "  version    Print the version and exit")
 	fmt.Fprintln(w, "  help       Print this help and exit")
 	fmt.Fprintln(w)
