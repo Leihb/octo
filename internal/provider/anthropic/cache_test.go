@@ -53,3 +53,74 @@ func TestCacheableRequest_NoSystemNoTools(t *testing.T) {
 		t.Errorf("tools should be nil")
 	}
 }
+
+func TestMarkMessageCacheable_StringContent(t *testing.T) {
+	m := apiMessage{Role: "user", Content: json.RawMessage(`"hello world"`)}
+	out := markMessageCacheable(m)
+	var blocks []map[string]any
+	if err := json.Unmarshal(out.Content, &blocks); err != nil {
+		t.Fatalf("string content should become a block array: %v (%s)", err, out.Content)
+	}
+	if len(blocks) != 1 || blocks[0]["text"] != "hello world" || blocks[0]["type"] != "text" {
+		t.Errorf("expected one text block carrying the string, got %v", blocks)
+	}
+	if blocks[0]["cache_control"] == nil {
+		t.Errorf("text block should carry cache_control: %v", blocks[0])
+	}
+}
+
+func TestMarkMessageCacheable_BlockArrayContent(t *testing.T) {
+	m := apiMessage{Role: "assistant", Content: json.RawMessage(
+		`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`)}
+	out := markMessageCacheable(m)
+	var blocks []map[string]any
+	if err := json.Unmarshal(out.Content, &blocks); err != nil {
+		t.Fatal(err)
+	}
+	if blocks[0]["cache_control"] != nil {
+		t.Errorf("only the LAST block should be marked; first was marked: %v", blocks[0])
+	}
+	if blocks[len(blocks)-1]["cache_control"] == nil {
+		t.Errorf("last block should carry cache_control: %v", blocks[len(blocks)-1])
+	}
+}
+
+func TestMarkMessagesCacheable_LastTwo(t *testing.T) {
+	msgs := []apiMessage{
+		{Role: "user", Content: json.RawMessage(`"m0"`)},
+		{Role: "assistant", Content: json.RawMessage(`"m1"`)},
+		{Role: "user", Content: json.RawMessage(`"m2"`)},
+	}
+	markMessagesCacheable(msgs)
+	// m0 untouched (still a bare string), m1 + m2 marked.
+	if string(msgs[0].Content) != `"m0"` {
+		t.Errorf("m0 should be untouched, got %s", msgs[0].Content)
+	}
+	for _, i := range []int{1, 2} {
+		if !strings.Contains(string(msgs[i].Content), `"ephemeral"`) {
+			t.Errorf("m%d should carry a cache breakpoint: %s", i, msgs[i].Content)
+		}
+	}
+}
+
+func TestMarkMessagesCacheable_SingleMessage(t *testing.T) {
+	msgs := []apiMessage{{Role: "user", Content: json.RawMessage(`"only"`)}}
+	markMessagesCacheable(msgs)
+	if !strings.Contains(string(msgs[0].Content), `"ephemeral"`) {
+		t.Errorf("the single message should be marked: %s", msgs[0].Content)
+	}
+}
+
+func TestCacheableRequest_MarksHistory(t *testing.T) {
+	body := apiRequest{Messages: []apiMessage{
+		{Role: "user", Content: json.RawMessage(`"u0"`)},
+		{Role: "assistant", Content: json.RawMessage(`"a0"`)},
+	}}
+	cacheableRequest(&body, "sys", nil)
+	// Both messages (last two of two) carry breakpoints; system too.
+	for i := range body.Messages {
+		if !strings.Contains(string(body.Messages[i].Content), `"ephemeral"`) {
+			t.Errorf("message %d should be cache-marked: %s", i, body.Messages[i].Content)
+		}
+	}
+}

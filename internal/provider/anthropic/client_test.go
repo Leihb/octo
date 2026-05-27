@@ -55,8 +55,14 @@ func TestSend_Success(t *testing.T) {
 		if len(req.Messages) != 1 {
 			t.Fatalf("messages len = %d, want 1", len(req.Messages))
 		}
-		if req.Messages[0].Role != "user" || string(req.Messages[0].Content) != `"hello"` {
-			t.Errorf("first message = %+v, want {user, \"hello\"}", req.Messages[0])
+		// The last message carries a cache breakpoint, so its content is sent
+		// as a block array (not a bare string) with an ephemeral marker.
+		msgJSON := string(req.Messages[0].Content)
+		if req.Messages[0].Role != "user" || !strings.Contains(msgJSON, `"hello"`) {
+			t.Errorf("first message = %+v, want a user block carrying 'hello'", req.Messages[0])
+		}
+		if !strings.Contains(msgJSON, `"ephemeral"`) {
+			t.Errorf("last message should carry a cache breakpoint: %s", msgJSON)
 		}
 
 		// Response
