@@ -376,9 +376,10 @@ func TestAgent_Run_MultipleToolCalls(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_ExceedsMaxIterations(t *testing.T) {
-	// Every reply is tool_use — loop should hit the cap.
-	replies := make([]Reply, maxToolIterations+5)
+func TestAgent_Run_ExceedsMaxTurns_FriendlyStop(t *testing.T) {
+	// Every reply is tool_use — loop hits the cap. Hitting it must NOT error;
+	// it returns a friendly reply with StopReason "max_turns".
+	replies := make([]Reply, defaultMaxTurns+5)
 	for i := range replies {
 		replies[i] = Reply{
 			StopReason: "tool_use",
@@ -390,9 +391,72 @@ func TestAgent_Run_ExceedsMaxIterations(t *testing.T) {
 	a := New(send, "m")
 	defs := []ToolDefinition{{Name: "bash"}}
 
-	_, err := a.Run(context.Background(), "go", defs, exec)
-	if err == nil {
-		t.Fatal("expected error when max iterations exceeded")
+	reply, err := a.Run(context.Background(), "go", defs, exec)
+	if err != nil {
+		t.Fatalf("hitting the cap should not error, got %v", err)
+	}
+	if reply.StopReason != StopReasonMaxTurns {
+		t.Errorf("StopReason = %q, want %q", reply.StopReason, StopReasonMaxTurns)
+	}
+	if !strings.Contains(reply.Content, "max-turns") {
+		t.Errorf("reply should explain the limit, got %q", reply.Content)
+	}
+}
+
+func TestAgent_Run_CustomMaxTurns(t *testing.T) {
+	// MaxTurns=2 → exactly 2 provider calls, then a friendly stop.
+	replies := make([]Reply, 10)
+	for i := range replies {
+		replies[i] = Reply{StopReason: "tool_use", Blocks: []ContentBlock{NewToolUseBlock("c", "bash", nil)}}
+	}
+	send := &fakeToolSender{replies: replies}
+	exec := &fakeExecutor{}
+	a := New(send, "m")
+	a.MaxTurns = 2
+	defs := []ToolDefinition{{Name: "bash"}}
+
+	reply, err := a.Run(context.Background(), "go", defs, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.StopReason != StopReasonMaxTurns {
+		t.Errorf("StopReason = %q, want max_turns", reply.StopReason)
+	}
+	if send.calls != 2 {
+		t.Errorf("provider calls = %d, want 2 (MaxTurns)", send.calls)
+	}
+}
+
+func TestAgent_Run_MaxCostStops(t *testing.T) {
+	// First reply reports tokens that push session cost over the budget; the
+	// loop must stop before the second provider call.
+	send := &fakeToolSender{
+		replies: []Reply{
+			{
+				StopReason:   "tool_use",
+				Blocks:       []ContentBlock{NewToolUseBlock("c", "bash", nil)},
+				InputTokens:  1_000_000, // ~$3 at default sonnet input pricing
+				OutputTokens: 0,
+			},
+			{Content: "should not be reached", StopReason: "end_turn"},
+		},
+	}
+	exec := &fakeExecutor{}
+	a := New(send, "claude-sonnet-4-6")
+	a.MaxCostUSD = 0.50 // well under the first call's ~$3
+	defs := []ToolDefinition{{Name: "bash"}}
+
+	reply, err := a.Run(context.Background(), "go", defs, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.StopReason != StopReasonMaxCost {
+		t.Errorf("StopReason = %q, want max_cost", reply.StopReason)
+	}
+	// One provider call happened (cost only known after it); the second was
+	// gated out.
+	if send.calls != 1 {
+		t.Errorf("provider calls = %d, want 1 (stopped on cost before 2nd)", send.calls)
 	}
 }
 

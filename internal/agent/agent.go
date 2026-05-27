@@ -106,10 +106,28 @@ type Agent struct {
 	// Gate means no gating — all tool calls run (the pre-M6.5 behaviour).
 	Gate PermissionGate
 
+	// MaxTurns caps the number of provider round-trips in a single Run/
+	// RunStream. <= 0 uses defaultMaxTurns. Hitting the cap ends the run
+	// with a friendly budget reply (StopReason "max_turns"), not an error.
+	MaxTurns int
+
+	// MaxCostUSD caps cumulative session spend. 0 = unlimited. When the
+	// running estimate reaches the cap the loop stops before the next
+	// provider call with StopReason "max_cost".
+	MaxCostUSD float64
+
 	// Cumulative token counts for this session (all turns combined).
 	sessionInputTokens  int
 	sessionOutputTokens int
 }
+
+// StopReason sentinels set on the Reply when a loop budget is exhausted.
+// They are NOT provider stop reasons — the agent synthesises them so callers
+// can distinguish "the model finished" from "we cut it off".
+const (
+	StopReasonMaxTurns = "max_turns"
+	StopReasonMaxCost  = "max_cost"
+)
 
 // New constructs an Agent with a fresh History.
 //
@@ -209,10 +227,10 @@ func (a *Agent) TurnStream(
 	return reply, nil
 }
 
-// maxToolIterations is the safety cap on the agentic loop. If the model
-// requests more tool calls than this in a single Run, we bail out with an
-// error rather than looping forever.
-const maxToolIterations = 20
+// defaultMaxTurns is the fallback per-Run loop cap when Agent.MaxTurns is
+// unset (<= 0). A "turn" here is one provider round-trip inside the agentic
+// loop; the cap stops a misbehaving model from looping on tools forever.
+const defaultMaxTurns = 20
 
 // Run is the agentic loop: it appends the user message to history then
 // repeatedly calls the provider until the model reaches end_turn (no more
@@ -353,7 +371,17 @@ func (a *Agent) runLoop(
 ) (Reply, error) {
 	a.History.Append(NewUserMessage(userInput))
 
-	for i := 0; i < maxToolIterations; i++ {
+	limit := a.turnLimit()
+	for i := 0; i < limit; i++ {
+		// Cost gate: checked before each provider call. Cost is only known
+		// after a response, so the worst case is one call that tips over the
+		// budget; we stop before the next.
+		if a.MaxCostUSD > 0 && a.SessionCostUSD() >= a.MaxCostUSD {
+			return a.budgetStop(handler, StopReasonMaxCost, fmt.Sprintf(
+				"[octo] Stopped: session cost budget ($%.4f) reached. The task may be "+
+					"incomplete — raise --max-cost or start a new session to continue.", a.MaxCostUSD))
+		}
+
 		reply, err := send(ctx, a.History.Snapshot())
 		if err != nil {
 			if i == 0 {
@@ -402,7 +430,36 @@ func (a *Agent) runLoop(
 		return reply, nil
 	}
 
-	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
+	// Loop cap reached while the model still wanted to keep going. End the
+	// run gracefully rather than erroring — the history holds the partial
+	// progress and the caller gets a clear, non-fatal explanation.
+	return a.budgetStop(handler, StopReasonMaxTurns, fmt.Sprintf(
+		"[octo] Stopped: reached the max-turns limit (%d). The task may be incomplete — "+
+			"raise --max-turns or send another message to continue.", limit))
+}
+
+// turnLimit resolves the per-Run loop cap, applying the default when unset.
+func (a *Agent) turnLimit() int {
+	if a.MaxTurns > 0 {
+		return a.MaxTurns
+	}
+	return defaultMaxTurns
+}
+
+// budgetStop ends a run that hit a loop budget (turns or cost). It appends a
+// synthetic assistant message so history stays well-formed, surfaces the
+// message as a text delta + turn_done event (so streaming callers render it
+// like normal reply text), and returns a Reply carrying the budget StopReason
+// — never an error, so the partial progress isn't discarded.
+func (a *Agent) budgetStop(handler EventHandler, reason, msg string) (Reply, error) {
+	a.History.Append(NewAssistantMessage(msg))
+	reply := Reply{Content: msg, StopReason: reason}
+	if handler != nil {
+		handler(AgentEvent{Kind: EventTextDelta, Text: msg})
+		r := reply
+		handler(AgentEvent{Kind: EventTurnDone, Reply: &r})
+	}
+	return reply, nil
 }
 
 // emitToolStartedEvents fires one EventToolStarted per tool_use block.

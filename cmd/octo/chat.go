@@ -58,6 +58,8 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
 	permMode := fs.String("permission-mode", "interactive", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask)")
+	maxTurns := fs.Int("max-turns", 0, "Max provider round-trips per message in the agentic loop (0 = default 20)")
+	maxCost := fs.Float64("max-cost", 0, "Stop the session once estimated cost (USD) reaches this; 0 = unlimited")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -133,6 +135,8 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	a := agent.New(providerSender{p: prov}, resolvedModel)
 	a.System = prompt.Compose(*system, cwd)
 	a.MaxTokens = *maxTokens
+	a.MaxTurns = *maxTurns
+	a.MaxCostUSD = *maxCost
 
 	// ── REPL mode ────────────────────────────────────────────────────────────
 	if isREPL {
