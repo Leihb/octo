@@ -20,12 +20,12 @@ A+B 加固（#60–#65）之后，对标项基本落地完毕：
 | C8 | 跨会话记忆 · 第一层（`~/.octo/octorules.md` + `@include`） | ✅ #79 |
 | C9 | 跨会话记忆 · 第二层（类型化记忆） | ⏸ 推迟，与 M7 Skill 合并规划 |
 | C10 | 优雅中断（Ctrl-C） | ✅ #77 |
-| C11 | OS 级命令沙箱 | ✅ Phase 1 #82（设计 #81）；Phase 2/3 待做 |
+| C11 | OS 级命令沙箱 | ✅ Phase 1 #82（设计 #81）+ Phase 3 可配置 #84；Phase 2 主机白名单已放弃（见 `c11-sandbox-design.md` §8）|
 | C12 | 后台/并发命令执行（`terminal background` + `terminal_output`） | ✅ #76 |
 
 附带落地：provider 流式/缓存修复(#72)、DeepSeek reasoning_content(#73)、Anthropic extended thinking(#74)、`octo init` / `/init`(#80)。
 
-**剩余**：C9（并入 M7）、沙箱 C11 Phase 2（网络白名单）+ Phase 3（默认开 + 可配策略，见 `c11-sandbox-design.md` §8）。
+**剩余**：C9（并入 M7）；沙箱默认开（待网络故事成熟后再议）。C11 网络故事 = `--sandbox-allow-net` 的 on/off 开关,主机白名单经评估后放弃。
 
 ---
 
