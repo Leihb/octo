@@ -214,9 +214,11 @@ func (a *Agent) TurnStream(
 // error rather than looping forever.
 const maxToolIterations = 20
 
-// Run is the agentic loop. It appends the user message to history then
+// Run is the agentic loop: it appends the user message to history then
 // repeatedly calls the provider until the model reaches end_turn (no more
-// tool calls) or the iteration cap is hit.
+// tool calls) or the iteration cap is hit. Run is the buffered, no-event
+// counterpart of RunStream — both drive the same runLoop, Run with a nil
+// handler so no AgentEvents are emitted.
 //
 // If tools is nil or executor is nil, Run is equivalent to Turn (single-turn,
 // no tool dispatch).
@@ -231,57 +233,21 @@ func (a *Agent) Run(ctx context.Context, userInput string, tools []ToolDefinitio
 		return Reply{}, fmt.Errorf("agent: userInput must be non-empty")
 	}
 
-	// No tools → plain Turn.
+	// No tools (or a Sender that can't do tools) → plain Turn.
 	if len(tools) == 0 || executor == nil {
 		return a.Turn(ctx, userInput)
 	}
-
 	ts, ok := a.Sender.(ToolSender)
 	if !ok {
-		// Sender doesn't support tools; fall back to Turn.
 		return a.Turn(ctx, userInput)
 	}
 
-	a.History.Append(NewUserMessage(userInput))
-
-	for i := 0; i < maxToolIterations; i++ {
-		reply, err := ts.SendMessagesWithTools(ctx, a.Model, a.System, a.History.Snapshot(), a.MaxTokens, tools)
-		if err != nil {
-			if i == 0 {
-				a.History.popLast()
-			}
-			return Reply{}, fmt.Errorf("agent: run[%d]: %w", i, err)
-		}
-		a.sessionInputTokens += reply.InputTokens
-		a.sessionOutputTokens += reply.OutputTokens
-
-		if reply.StopReason == "tool_use" {
-			// Append assistant message with tool_use blocks, then dispatch.
-			a.History.Append(NewToolUseMessage(reply.Blocks))
-
-			// Run.runner doesn't carry a handler — progress events would
-			// have nowhere to go. Pass nil; dispatchTools degrades to the
-			// non-streaming path automatically.
-			resultBlocks, err := dispatchTools(ctx, executor, reply.Blocks, nil, a.Gate)
-			if err != nil {
-				return Reply{}, fmt.Errorf("agent: dispatch tools[%d]: %w", i, err)
-			}
-			a.History.Append(NewToolResultMessage(resultBlocks))
-			continue
-		}
-
-		// end_turn (or other stop reason): done.
-		// Use text content from reply; if Content is empty but Blocks has text, reconstruct.
-		content := reply.Content
-		if content == "" {
-			content = textFromBlocks(reply.Blocks)
-		}
-		a.History.Append(NewAssistantMessage(content))
-		reply.Content = content
-		return reply, nil
-	}
-
-	return Reply{}, fmt.Errorf("agent: exceeded max tool iterations (%d)", maxToolIterations)
+	// Buffered send + nil handler: runLoop runs the same dispatch/history
+	// machinery as the streaming path but emits no events.
+	return a.runLoop(ctx, userInput, tools, executor, nil,
+		func(ctx context.Context, msgs []Message) (Reply, error) {
+			return ts.SendMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools)
+		})
 }
 
 // RunStream is the streaming agentic loop. Behaves like Run but emits
@@ -344,13 +310,13 @@ func (a *Agent) RunStream(
 
 	// Try ToolStreamingSender first, then fall back to ToolSender (buffered).
 	if tss, ok := a.Sender.(ToolStreamingSender); ok {
-		return a.runStreamLoop(ctx, userInput, tools, executor, handler,
+		return a.runLoop(ctx, userInput, tools, executor, handler,
 			func(ctx context.Context, msgs []Message) (Reply, error) {
 				return tss.StreamMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools, onChunk, onToolDelta)
 			})
 	}
 	if ts, ok := a.Sender.(ToolSender); ok {
-		return a.runStreamLoop(ctx, userInput, tools, executor, handler,
+		return a.runLoop(ctx, userInput, tools, executor, handler,
 			func(ctx context.Context, msgs []Message) (Reply, error) {
 				reply, err := ts.SendMessagesWithTools(ctx, a.Model, a.System, msgs, a.MaxTokens, tools)
 				if err == nil && reply.Content != "" {
@@ -370,11 +336,14 @@ func (a *Agent) RunStream(
 	return reply, err
 }
 
-// runStreamLoop is the shared inner loop for RunStream. The send function
-// encapsulates the provider call (streaming or buffered) and is responsible
-// for surfacing text deltas itself; this loop is only responsible for tool
-// dispatch and tool-level events.
-func (a *Agent) runStreamLoop(
+// runLoop is the single agentic loop shared by Run and RunStream. The send
+// function encapsulates the provider call (streaming or buffered) and is
+// responsible for surfacing text deltas itself; this loop owns tool dispatch,
+// history bookkeeping, and tool-level event emission.
+//
+// handler may be nil (the Run path): every emit* helper and the dispatch
+// progress path short-circuit on nil, so no events fire.
+func (a *Agent) runLoop(
 	ctx context.Context,
 	userInput string,
 	tools []ToolDefinition,
@@ -390,7 +359,7 @@ func (a *Agent) runStreamLoop(
 			if i == 0 {
 				a.History.popLast()
 			}
-			return Reply{}, fmt.Errorf("agent: run-stream[%d]: %w", i, err)
+			return Reply{}, fmt.Errorf("agent: loop[%d]: %w", i, err)
 		}
 		a.sessionInputTokens += reply.InputTokens
 		a.sessionOutputTokens += reply.OutputTokens

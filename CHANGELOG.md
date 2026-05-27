@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.1.0-dev]
 
+### Changed
+- **Unified agentic loop** — `Run` (buffered) and `RunStream` (streaming) previously carried two near-duplicate copies of the tool-dispatch loop, so changes like the permission gate had to be applied in both. They now share a single `runLoop`; `Run` drives it with a buffered send closure and a nil event handler (every event-emit path short-circuits on nil), `RunStream` with a streaming closure and a real handler. Behaviour is unchanged — verified by the existing `Run` and `RunStream` test suites.
+
 ### Added
 - **System prompt composition** — new `internal/prompt` package assembles the session system prompt from three layers in order of specificity: an embedded base prompt (octo identity + tool-use / permission / read-before-write norms) < the repo's `.octorules` (if present in cwd) < the `--system` flag. Composed once per session and frozen (recomputing mid-session would bust the provider prompt cache). Previously the default system prompt was empty — the agent got tool schemas but zero behavioral guidance.
 - **Anthropic prompt caching** — requests now place a `cache_control: ephemeral` breakpoint on the system block, which (per the tools → system → messages prefix order) caches the entire stable system+tools prefix that was previously re-sent at full price every agentic-loop iteration. Falls back to marking the last tool when there's no system prompt. Cuts input-token cost on the cached prefix by ~90% on multi-tool turns. (History-prefix caching pairs with the upcoming compaction work.)
