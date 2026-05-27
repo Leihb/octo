@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased — 0.1.0-dev]
 
 ### Fixed
-- **Session ID collisions** — session IDs were `YYYYMMDD-HHMMSS` (second precision), so two sessions started in the same second silently overwrote each other's save file. IDs now carry a 4-hex-char random suffix (`YYYYMMDD-HHMMSS-xxxx`), keeping them sortable/readable while removing the collision.
+- **Session ID collisions** — session IDs were `YYYYMMDD-HHMMSS` (second precision), so two sessions started in the same second silently overwrote each other's save file. IDs now carry an 8-hex-char (32-bit) random suffix (`YYYYMMDD-HHMMSS-xxxxxxxx`), keeping them sortable/readable while making same-second collisions negligible.
 
 ### Changed
 - **Parallel dispatch of read-only tools** — when the model emits several tool calls in one turn and they're all side-effect-free (`read_file` / `glob` / `grep` / `web_fetch` / `web_search`), `dispatchTools` now runs them concurrently instead of one-at-a-time, cutting latency on the common "read three files at once" pattern. The permission gate still runs serially first (an interactive `ask` prompt must not race another on stdin); only the allowed calls execute, and results stay in block order. Any mutating or streaming tool in the batch (or a single call) keeps the serial path, preserving `tool_progress` streaming.
