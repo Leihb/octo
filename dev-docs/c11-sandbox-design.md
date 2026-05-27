@@ -171,14 +171,27 @@ default-off means normal use is unaffected. Revisit later if needed.
 
 ## 8. Phasing
 
-- **Phase 1 (this milestone):** `internal/sandbox` abstraction + both exec sites
+- **Phase 1 (done, #82):** `internal/sandbox` abstraction + both exec sites
   + **FS read/write roots + network deny**, on macOS (SBPL) and Linux
   (landlock+seccomp shim); `--sandbox` flag on `octo chat` and `octo init`;
   `Available()` probe + fail-closed; Windows unsupported.
-- **Phase 2:** network **allowlist** (specific hosts) rather than all-or-nothing
-  — SBPL host rules / seccomp+resolver or a proxy.
-- **Phase 3:** default-on + configurable policy (e.g. a `sandbox:` block read
-  near `.octorules`, extra roots, per-project network allowlist).
+- **Phase 3 (done, #84):** configurable policy — `--sandbox-allow-net`,
+  `--sandbox-write <dir>`, `--sandbox-read <dir>` extend the default policy.
+- **Phase 2 — network host allowlist: dropped (decided 2026-05-27).**
+  Per-host network filtering is not feasible as a hard boundary at the OS layer:
+  Linux seccomp can't inspect `connect()`'s destination (sockaddr is a pointer),
+  and macOS SBPL filters by IP/port, not hostname. The only routes are a local
+  HTTP(S) **proxy** (a *soft* allowlist — bypassable by raw-socket tools, only
+  honored by proxy-aware tools) or a network-namespace + slirp/NAT setup (heavy,
+  needs user namespaces, still IP-only on macOS). Cost/value and the weak
+  guarantee don't justify it. **The network story is the deny-all / allow-all
+  toggle** (`--sandbox-allow-net`), which covers the practical safety need
+  ("this task needs the network: on; otherwise off"). Revisit only if a concrete
+  per-host requirement appears.
+- **Default-on:** deferred. Without a network allowlist, flipping `--sandbox`
+  default-on would break every network-needing command (`go mod download`,
+  `git fetch`, …). Kept opt-in; the permission engine + strict mode remain the
+  always-on backstop.
 
 ## 9. Testing
 
