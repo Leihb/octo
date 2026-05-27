@@ -101,10 +101,13 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		// Per the SSE spec the single space after "data:" is optional. OpenAI
+		// and DeepSeek send "data: {...}" but some compatible backends omit
+		// the space; strip the prefix and at most one leading space.
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
 		if data == "" {
 			continue
 		}
