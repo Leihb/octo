@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,18 +23,31 @@ type Session struct {
 	Messages  []Message `json:"messages"`
 }
 
-// NewSession creates a Session with an ID derived from the current time.
-// Format: YYYYMMDD-HHMMSS (no external uniqueness dependency; two sessions
-// started in the same second get the same ID — acceptable for interactive use).
+// NewSession creates a Session with an ID derived from the current time plus
+// a short random suffix: YYYYMMDD-HHMMSS-xxxx. The timestamp keeps IDs
+// roughly sortable and human-readable; the suffix removes the same-second
+// collision that would otherwise let two sessions overwrite each other's
+// file (e.g. two quick `octo chat` launches, or anything non-interactive).
 func NewSession(model, system string) *Session {
 	now := time.Now()
 	return &Session{
-		ID:        now.Format("20060102-150405"),
+		ID:        now.Format("20060102-150405") + "-" + randomSuffix(now),
 		CreatedAt: now,
 		UpdatedAt: now,
 		Model:     model,
 		System:    system,
 	}
+}
+
+// randomSuffix returns 4 hex chars from crypto/rand. If the system RNG is
+// somehow unavailable it falls back to the sub-second nanosecond fraction,
+// which still disambiguates same-second IDs from a single process.
+func randomSuffix(now time.Time) string {
+	var b [2]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%04x", now.Nanosecond()&0xffff)
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // TurnCount returns the number of complete user+assistant turn pairs.

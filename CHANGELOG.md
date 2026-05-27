@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.1.0-dev]
 
+### Fixed
+- **Session ID collisions** — session IDs were `YYYYMMDD-HHMMSS` (second precision), so two sessions started in the same second silently overwrote each other's save file. IDs now carry a 4-hex-char random suffix (`YYYYMMDD-HHMMSS-xxxx`), keeping them sortable/readable while removing the collision.
+
 ### Changed
 - **Loop budget gates** — the agentic loop's hardcoded 20-iteration cap (which `error`ed out and discarded the turn) is replaced by configurable `Agent.MaxTurns` (default 20) and `Agent.MaxCostUSD` (0 = unlimited), surfaced as `octo chat --max-turns` / `--max-cost`. Hitting either limit now ends the run *gracefully*: history keeps the partial progress and the caller gets a friendly assistant message (`[octo] Stopped: …`) with a sentinel `StopReason` (`max_turns` / `max_cost`) instead of an error. The cost gate checks the running session estimate before each provider call. (Ports Ruby CATCHUP P0-4.)
 - **Unified agentic loop** — `Run` (buffered) and `RunStream` (streaming) previously carried two near-duplicate copies of the tool-dispatch loop, so changes like the permission gate had to be applied in both. They now share a single `runLoop`; `Run` drives it with a buffered send closure and a nil event handler (every event-emit path short-circuits on nil), `RunStream` with a streaming closure and a real handler. Behaviour is unchanged — verified by the existing `Run` and `RunStream` test suites.

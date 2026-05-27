@@ -36,12 +36,25 @@ func TestNewSession(t *testing.T) {
 
 func TestSessionIDFormat(t *testing.T) {
 	s := NewSession("m", "")
-	// YYYYMMDD-HHMMSS — 15 chars
-	if len(s.ID) != 15 {
-		t.Errorf("ID len = %d, want 15 (got %q)", len(s.ID), s.ID)
+	// YYYYMMDD-HHMMSS-xxxx — 20 chars (15 timestamp + '-' + 4 hex suffix).
+	if len(s.ID) != 20 {
+		t.Errorf("ID len = %d, want 20 (got %q)", len(s.ID), s.ID)
 	}
-	if s.ID[8] != '-' {
-		t.Errorf("ID[8] = %q, want '-' (got %q)", s.ID[8], s.ID)
+	if s.ID[8] != '-' || s.ID[15] != '-' {
+		t.Errorf("ID separators wrong: %q", s.ID)
+	}
+}
+
+func TestSessionID_NoCollisionSameSecond(t *testing.T) {
+	// Two sessions created back-to-back (same second) must get distinct IDs,
+	// so their save files don't clobber each other.
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		id := NewSession("m", "").ID
+		if seen[id] {
+			t.Fatalf("duplicate session ID within the same second: %q", id)
+		}
+		seen[id] = true
 	}
 }
 
