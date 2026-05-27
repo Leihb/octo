@@ -41,6 +41,27 @@ func TestDefaultRules_TerminalCommon(t *testing.T) {
 	}
 }
 
+func TestDefaultRules_TerminalCredentialPathsBeatSafeVerb(t *testing.T) {
+	// A "safe" verb like cat would auto-allow, but a credential path in the
+	// command must win because its rule precedes the allow rules.
+	e := newDefaultEngine(t)
+	cases := map[string]Decision{
+		"cat /etc/passwd":                 Ask,
+		"cat /etc/shadow":                 Ask,
+		"cat ~/.ssh/id_rsa":               Ask,
+		"cat ~/.aws/credentials":          Ask,
+		"grep secret ~/.ssh/id_ed25519":   Ask,
+		"cat README.md":                   Allow, // ordinary safe read still allows
+		"sed -i 's/a/b/' main.go":         Deny,  // in-place edit denied
+		"sed --in-place 's/a/b/' main.go": Deny,
+	}
+	for cmd, want := range cases {
+		if got := e.Check("terminal", map[string]any{"command": cmd}); got != want {
+			t.Errorf("terminal %q: got %s, want %s", cmd, got, want)
+		}
+	}
+}
+
 func TestDefaultRules_WebFetchPrivateRangeDenied(t *testing.T) {
 	e := newDefaultEngine(t)
 	cases := map[string]Decision{

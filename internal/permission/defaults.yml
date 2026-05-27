@@ -25,6 +25,20 @@ terminal:
   - ask:   { pattern: "wget " }
   - ask:   { pattern: "ssh " }
   - ask:   { pattern: "scp " }
+  # In-place stream edits bypass the file tools' permission + read-before-write
+  # checks. Deny outright; the terminal tool also guards this with a message
+  # steering the model to edit_file (defence in depth for permissive configs).
+  - deny:  { pattern: "sed -i" }
+  - deny:  { pattern: "sed --in-place" }
+  # Sensitive-path access — must precede the safe-verb allows below, otherwise
+  # `cat /etc/passwd` would match `allow: cat ` and slip through. Substring
+  # matches are intentionally specific to avoid false positives.
+  - ask:   { pattern: "/etc/shadow" }
+  - ask:   { pattern: "/etc/passwd" }
+  - ask:   { pattern: ".ssh/id_" }
+  - ask:   { pattern: ".aws/credentials" }
+  - ask:   { pattern: "id_rsa" }
+  - ask:   { pattern: "id_ed25519" }
   # Common safe commands — auto-allow so the user isn't drowning in prompts.
   - allow: { pattern: "ls" }
   - allow: { pattern: "cat " }
