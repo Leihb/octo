@@ -77,6 +77,9 @@ func (TerminalTool) ExecuteStream(
 	if command == "" {
 		return "", fmt.Errorf("terminal: command is required")
 	}
+	if err := guardCommand(command); err != nil {
+		return "", err
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, TerminalTimeout)
 	defer cancel()
