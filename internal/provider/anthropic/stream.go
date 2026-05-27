@@ -113,11 +113,14 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		// SSE frames: "data: <json>" lines, separated by blank lines.
-		if !strings.HasPrefix(line, "data: ") {
+		// SSE frames: "data:<json>" lines, separated by blank lines. Per the
+		// SSE spec the single space after "data:" is optional — Anthropic
+		// sends "data: {...}" but some compatible backends (Kimi) send
+		// "data:{...}". Strip the prefix and at most one leading space.
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
 		if data == "" {
 			continue
 		}
@@ -188,6 +191,20 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 			// final message_delta carries the authoritative total.
 			if ev.Usage != nil {
 				result.OutputTokens = ev.Usage.OutputTokens
+				// Anthropic reports cache accounting in message_start, but some
+				// compatible backends (Kimi) only report it in the final
+				// message_delta. Take non-zero cache values here so we don't
+				// miss those hits; the >0 guard avoids clobbering message_start's
+				// counts with a trailing zero. A cache_read here also means this
+				// backend sent full final accounting, so adopt its input_tokens
+				// (the non-cached remainder) too.
+				if ev.Usage.CacheReadInputTokens > 0 {
+					result.CacheReadTokens = ev.Usage.CacheReadInputTokens
+					result.InputTokens = ev.Usage.InputTokens
+				}
+				if ev.Usage.CacheCreationInputTokens > 0 {
+					result.CacheWriteTokens = ev.Usage.CacheCreationInputTokens
+				}
 			}
 
 		case "error":
