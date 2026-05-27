@@ -130,6 +130,89 @@ func TestSend_ToolCall_Response(t *testing.T) {
 	}
 }
 
+// TestReasoningContent_RoundTrips verifies the thinking-model contract used by
+// deepseek-v4: reasoning_content returned alongside a tool call is captured
+// onto the tool_use block, then re-emitted on the follow-up assistant message
+// (which carries tool_calls) — but never on a plain text turn.
+func TestReasoningContent_RoundTrips(t *testing.T) {
+	// 1. A tool-call response carrying reasoning_content lands on the block.
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"id":"x","object":"chat.completion","model":"deepseek-v4-flash",
+			"choices":[{"index":0,"finish_reason":"tool_calls","message":{
+				"role":"assistant","content":"","reasoning_content":"I should read the file.",
+				"tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"go.mod\"}"}}]
+			}}],
+			"usage":{"prompt_tokens":5,"completion_tokens":15,"total_tokens":20}
+		}`))
+	}))
+	defer srv1.Close()
+
+	c, _ := New("k")
+	c.BaseURL = srv1.URL
+	resp, err := c.Send(context.Background(), provider.Request{
+		Model:    "deepseek-v4-flash",
+		Messages: []agent.Message{agent.NewUserMessage("read go.mod")},
+		Tools:    []agent.ToolDefinition{{Name: "read_file"}},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(resp.Blocks) != 1 || resp.Blocks[0].Type != "tool_use" {
+		t.Fatalf("Blocks = %+v, want one tool_use", resp.Blocks)
+	}
+	if resp.Blocks[0].Reasoning != "I should read the file." {
+		t.Fatalf("Reasoning = %q, want it captured onto the tool_use block", resp.Blocks[0].Reasoning)
+	}
+
+	// 2. On the follow-up, the assistant tool-call message re-emits
+	//    reasoning_content; the plain assistant turn must not.
+	var capturedBody []byte
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer srv2.Close()
+
+	c.BaseURL = srv2.URL
+	_, err = c.Send(context.Background(), provider.Request{
+		Model: "deepseek-v4-flash",
+		Messages: []agent.Message{
+			agent.NewUserMessage("read go.mod"),
+			agent.NewAssistantMessage("an earlier plain reply"),
+			agent.NewToolUseMessage(resp.Blocks),
+			agent.NewToolResultMessage([]agent.ContentBlock{agent.NewToolResultBlock("call-1", "module github.com/Leihb/octo-agent", false)}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Send 2: %v", err)
+	}
+
+	var wire struct {
+		Messages []struct {
+			Role             string `json:"role"`
+			ReasoningContent string `json:"reasoning_content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &wire); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var toolCallReasoning string
+	for _, m := range wire.Messages {
+		if m.Role == "assistant" && m.ReasoningContent != "" {
+			toolCallReasoning = m.ReasoningContent
+		}
+	}
+	if toolCallReasoning != "I should read the file." {
+		t.Errorf("tool-call assistant reasoning_content = %q, want it re-emitted", toolCallReasoning)
+	}
+	// The plain assistant turn ("an earlier plain reply") must carry no
+	// reasoning_content — guard against blanket emission that would break R1.
+	if strings.Count(string(capturedBody), `"reasoning_content"`) != 1 {
+		t.Errorf("reasoning_content should appear exactly once (tool-call turn only): %s", capturedBody)
+	}
+}
+
 // TestSend_ToolResultMessages_WireFormat verifies that tool_result blocks are
 // serialized as individual role="tool" messages (OpenAI format).
 func TestSend_ToolResultMessages_WireFormat(t *testing.T) {

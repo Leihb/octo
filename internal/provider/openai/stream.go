@@ -91,6 +91,7 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 
 	var (
 		contentB   strings.Builder
+		reasoningB strings.Builder
 		result     provider.Response
 		toolStates = map[int]*toolCallState{} // keyed by tool call index
 		toolOrder  []int                      // preserve order
@@ -140,6 +141,9 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 				onChunk(choice.Delta.Content)
 			}
 		}
+		// Reasoning trace from thinking models streams in its own delta field;
+		// accumulate but don't surface as visible text.
+		reasoningB.WriteString(choice.Delta.ReasoningContent)
 		// Accumulate tool call fragments.
 		for _, tc := range choice.Delta.ToolCalls {
 			st, exists := toolStates[tc.Index]
@@ -190,6 +194,7 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 		}
 		blocks = append(blocks, agent.NewToolUseBlock(st.id, st.name, input))
 	}
+	attachReasoning(blocks, reasoningB.String())
 	if len(blocks) > 0 {
 		result.Blocks = blocks
 	}
