@@ -186,15 +186,56 @@ func markToolsCacheable(tools []apiTool) []apiTool {
 	return tools
 }
 
-// cacheableRequest sets body.System and body.Tools with cache breakpoints
-// placed appropriately for the given prompt/tools. Shared by Send and
-// SendStream so both paths cache identically.
+// cacheableRequest places all cache breakpoints on a request: the system/
+// tools prefix (via buildSystem / markToolsCacheable) and the conversation
+// history (via markMessagesCacheable). Shared by Send and SendStream so both
+// paths cache identically. body.Messages must already be populated.
 func cacheableRequest(body *apiRequest, systemPrompt string, tools []apiTool) {
 	body.System = buildSystem(systemPrompt)
 	if body.System == nil {
 		tools = markToolsCacheable(tools) // no system block to anchor on
 	}
 	body.Tools = tools
+	markMessagesCacheable(body.Messages)
+}
+
+// markMessagesCacheable places cache breakpoints on the last two messages so
+// the conversation-history prefix is cached turn-over-turn (not just the
+// static system+tools prefix). Two consecutive markers — rather than one —
+// keep a cache anchor alive across the "old tail / new tail" boundary as
+// history grows and if the final message is dropped on a retry; the older of
+// the two still matches the prior request's prefix. The system breakpoint plus
+// these two stays within Anthropic's 4-breakpoint budget.
+func markMessagesCacheable(msgs []apiMessage) {
+	n := len(msgs)
+	for i := n - 1; i >= 0 && i >= n-2; i-- {
+		msgs[i] = markMessageCacheable(msgs[i])
+	}
+}
+
+// markMessageCacheable returns m with a cache_control breakpoint on its last
+// content block. A bare-string content is promoted to a single text block so
+// it can carry the marker (Anthropic only allows cache_control on blocks). On
+// any unexpected shape the message is returned unchanged.
+func markMessageCacheable(m apiMessage) apiMessage {
+	var blocks []map[string]any
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		var s string
+		if json.Unmarshal(m.Content, &s) != nil {
+			return m // neither array nor string — leave it alone
+		}
+		blocks = []map[string]any{{"type": "text", "text": s}}
+	}
+	if len(blocks) == 0 {
+		return m
+	}
+	blocks[len(blocks)-1]["cache_control"] = map[string]string{"type": "ephemeral"}
+	raw, err := json.Marshal(blocks)
+	if err != nil {
+		return m
+	}
+	m.Content = raw
+	return m
 }
 
 // toAPITools converts []agent.ToolDefinition to []apiTool.
