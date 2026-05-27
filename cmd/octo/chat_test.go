@@ -45,6 +45,17 @@ func TestRunChat_MissingAPIKey(t *testing.T) {
 	}
 }
 
+func TestRunChat_InvalidPermissionMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"--permission-mode", "strikt", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 (usage error)", code)
+	}
+	if !strings.Contains(stderr.String(), "permission-mode") {
+		t.Errorf("stderr should explain the bad flag; got: %q", stderr.String())
+	}
+}
+
 func TestRunChat_HonoursAnthropicBaseURL(t *testing.T) {
 	// Stand up a fake Anthropic-compatible endpoint and verify runChat
 	// actually POSTs there when ANTHROPIC_BASE_URL is set. Same shape the
