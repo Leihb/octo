@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // Sender is the minimal slice of provider.Provider the Agent depends on:
@@ -533,71 +534,133 @@ func emitToolResultEvents(handler EventHandler, useBlocks, resultBlocks []Conten
 	}
 }
 
-// dispatchTools calls executor.Execute (or ExecuteStream when both the
-// executor implements StreamingToolExecutor AND handler is non-nil) for
-// every tool_use block in blocks, returning the corresponding tool_result
-// blocks. Errors from Execute are returned as tool_result blocks with
-// IsError=true so the model can recover.
-//
-// handler may be nil — in that case progress events are dropped and even a
-// streaming executor effectively runs in non-streaming mode (the aggregated
-// output is still what lands in the tool_result block).
-//
-// gate may be nil — no permission gating. When non-nil, each tool call is
-// vetted before execution; a denied call is turned into an IsError
-// tool_result carrying the gate's reason and the executor is never invoked.
-func dispatchTools(ctx context.Context, executor ToolExecutor, blocks []ContentBlock, handler EventHandler, gate PermissionGate) ([]ContentBlock, error) {
-	streaming, hasStreaming := executor.(StreamingToolExecutor)
+// readOnlyTools are the built-in tools with no local side effects. A batch
+// composed entirely of these can be executed concurrently (see dispatchTools).
+// Conservative by design: anything that writes, edits, or shells out is absent,
+// so adding a new mutating tool can never accidentally be parallelised.
+var readOnlyTools = map[string]bool{
+	"read_file":  true,
+	"glob":       true,
+	"grep":       true,
+	"web_fetch":  true,
+	"web_search": true,
+}
 
-	var results []ContentBlock
+// toolCall pairs a tool_use block with the gate's verdict.
+type toolCall struct {
+	block      ContentBlock
+	denyReason string // non-empty → blocked by the gate; don't execute
+}
+
+// dispatchTools runs every tool_use block in blocks and returns the matching
+// tool_result blocks (order preserved). Errors become IsError results so the
+// model can recover.
+//
+// The permission gate runs first, serially, for every call — an interactive
+// "ask" prompt must never race another on stdin. Execution then happens in one
+// of two modes:
+//   - Parallel, when the batch has >1 executable call and every executable
+//     call is a read-only tool (readOnlyTools). The model frequently fires
+//     several read_file/grep calls at once; running them concurrently cuts
+//     latency. Read-only tools don't stream, so no progress events are lost.
+//   - Serial otherwise (a single call, or any mutating/streaming tool present),
+//     preserving EventToolProgress for StreamingToolExecutor tools.
+//
+// handler may be nil (no events); gate may be nil (no gating). Parallel mode
+// requires executor.Execute to be safe for concurrent calls on distinct
+// inputs — DefaultRegistry is (its only shared state, the read tracker, is
+// mutex-guarded).
+func dispatchTools(ctx context.Context, executor ToolExecutor, blocks []ContentBlock, handler EventHandler, gate PermissionGate) ([]ContentBlock, error) {
+	// Pass 1 — collect calls and run the gate serially.
+	var calls []toolCall
 	for _, b := range blocks {
 		if b.Type != "tool_use" {
 			continue
 		}
-
-		// Permission gate: a denial short-circuits execution and feeds the
-		// reason back to the LLM as an error result.
+		c := toolCall{block: b}
 		if gate != nil {
 			if allowed, reason := gate.Check(ctx, b.Name, b.Input); !allowed {
 				if reason == "" {
 					reason = "permission denied"
 				}
-				results = append(results, NewToolResultBlock(b.ID, reason, true))
-				continue
+				c.denyReason = reason
 			}
 		}
+		calls = append(calls, c)
+	}
 
+	results := make([]ContentBlock, len(calls))
+
+	// Pass 2 — execute.
+	if canParallelize(calls) {
+		var wg sync.WaitGroup
+		for i := range calls {
+			if calls[i].denyReason != "" {
+				results[i] = NewToolResultBlock(calls[i].block.ID, calls[i].denyReason, true)
+				continue
+			}
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				out, err := executor.Execute(ctx, calls[i].block.Name, calls[i].block.Input)
+				results[i] = toolResultBlock(calls[i].block.ID, out, err)
+			}(i)
+		}
+		wg.Wait()
+		return results, nil
+	}
+
+	streaming, hasStreaming := executor.(StreamingToolExecutor)
+	for i := range calls {
+		b := calls[i].block
+		if calls[i].denyReason != "" {
+			results[i] = NewToolResultBlock(b.ID, calls[i].denyReason, true)
+			continue
+		}
 		var (
 			output  string
 			execErr error
 		)
 		if hasStreaming && handler != nil {
-			// Capture id/name in this iteration's closure — the next loop
-			// iteration would clobber `b` otherwise.
 			toolID, toolName := b.ID, b.Name
 			progress := func(chunk string) {
 				if chunk == "" {
 					return
 				}
-				handler(AgentEvent{
-					Kind:     EventToolProgress,
-					ToolID:   toolID,
-					ToolName: toolName,
-					Chunk:    chunk,
-				})
+				handler(AgentEvent{Kind: EventToolProgress, ToolID: toolID, ToolName: toolName, Chunk: chunk})
 			}
 			output, execErr = streaming.ExecuteStream(ctx, b.Name, b.Input, progress)
 		} else {
 			output, execErr = executor.Execute(ctx, b.Name, b.Input)
 		}
-
-		if execErr != nil {
-			results = append(results, NewToolResultBlock(b.ID, execErr.Error(), true))
-		} else {
-			results = append(results, NewToolResultBlock(b.ID, output, false))
-		}
+		results[i] = toolResultBlock(b.ID, output, execErr)
 	}
 	return results, nil
+}
+
+// canParallelize reports whether a batch can run concurrently: more than one
+// executable (non-denied) call, every one a known read-only tool.
+func canParallelize(calls []toolCall) bool {
+	executable := 0
+	for _, c := range calls {
+		if c.denyReason != "" {
+			continue
+		}
+		if !readOnlyTools[c.block.Name] {
+			return false
+		}
+		executable++
+	}
+	return executable > 1
+}
+
+// toolResultBlock builds a tool_result, mapping an execution error onto an
+// IsError result carrying the error text.
+func toolResultBlock(id, output string, err error) ContentBlock {
+	if err != nil {
+		return NewToolResultBlock(id, err.Error(), true)
+	}
+	return NewToolResultBlock(id, output, false)
 }
 
 // textFromBlocks joins text from all "text" content blocks.

@@ -24,10 +24,12 @@ type Session struct {
 }
 
 // NewSession creates a Session with an ID derived from the current time plus
-// a short random suffix: YYYYMMDD-HHMMSS-xxxx. The timestamp keeps IDs
-// roughly sortable and human-readable; the suffix removes the same-second
-// collision that would otherwise let two sessions overwrite each other's
-// file (e.g. two quick `octo chat` launches, or anything non-interactive).
+// a random suffix: YYYYMMDD-HHMMSS-xxxxxxxx. The timestamp keeps IDs roughly
+// sortable and human-readable; the 32-bit suffix removes the same-second
+// collision that would otherwise let two sessions overwrite each other's file
+// (e.g. two quick `octo chat` launches, or anything non-interactive). 32 bits
+// keeps the birthday-collision probability negligible even across many
+// same-second sessions (16 bits was not enough — ~7% over 100).
 func NewSession(model, system string) *Session {
 	now := time.Now()
 	return &Session{
@@ -39,13 +41,13 @@ func NewSession(model, system string) *Session {
 	}
 }
 
-// randomSuffix returns 4 hex chars from crypto/rand. If the system RNG is
-// somehow unavailable it falls back to the sub-second nanosecond fraction,
-// which still disambiguates same-second IDs from a single process.
+// randomSuffix returns 8 hex chars (32 bits) from crypto/rand. If the system
+// RNG is somehow unavailable it falls back to the sub-second nanosecond
+// fraction, which still disambiguates same-second IDs from a single process.
 func randomSuffix(now time.Time) string {
-	var b [2]byte
+	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%04x", now.Nanosecond()&0xffff)
+		return fmt.Sprintf("%08x", uint32(now.Nanosecond()))
 	}
 	return hex.EncodeToString(b[:])
 }

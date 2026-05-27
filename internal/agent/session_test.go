@@ -36,9 +36,9 @@ func TestNewSession(t *testing.T) {
 
 func TestSessionIDFormat(t *testing.T) {
 	s := NewSession("m", "")
-	// YYYYMMDD-HHMMSS-xxxx — 20 chars (15 timestamp + '-' + 4 hex suffix).
-	if len(s.ID) != 20 {
-		t.Errorf("ID len = %d, want 20 (got %q)", len(s.ID), s.ID)
+	// YYYYMMDD-HHMMSS-xxxxxxxx — 24 chars (15 timestamp + '-' + 8 hex suffix).
+	if len(s.ID) != 24 {
+		t.Errorf("ID len = %d, want 24 (got %q)", len(s.ID), s.ID)
 	}
 	if s.ID[8] != '-' || s.ID[15] != '-' {
 		t.Errorf("ID separators wrong: %q", s.ID)
