@@ -21,6 +21,7 @@ type tool interface {
 // scan and the DefaultTools() listing both pick it up automatically.
 var allTools = []tool{
 	TerminalTool{},
+	TerminalOutputTool{},
 	ReadFileTool{},
 	WriteFileTool{},
 	EditFileTool{},

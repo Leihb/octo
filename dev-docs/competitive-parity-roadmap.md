@@ -58,6 +58,7 @@ system prompt。
 | # | 项 | 谁有 | 成本 | 说明 |
 |---|----|------|------|------|
 | C10 | 优雅中断（Ctrl-C） | 两家 | 1.5d | REPL 捕获中断 → 取消 ctx → 给在途/未执行工具合成 tool_result（历史保持 well-formed）→ 干净返回。 |
+| C12 | 后台/并发命令执行 | 两家 | 1.5d | `terminal` 加 `background` 参数：脱离 30s 超时、不阻塞，返回后台进程 id；新增 `terminal_output` 工具读取输出+状态（类比 CC `BashOutput`）。后台进程天然并发，绕开只读并行闸门。会话退出杀掉所有后台进程。 |
 
 > 错误恢复链（模型 fallback / output-token 升级 / prompt 超长自动压缩）优先级低、CC 专属，延后。
 

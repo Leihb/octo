@@ -200,6 +200,8 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	// ── Single-turn mode (original M2 behaviour) ──────────────────────────────
+	// Reap any background processes the turn spawned (REPL handles its own).
+	defer tools.KillAllBackground()
 	if *stream {
 		reply, err := a.TurnStream(context.Background(), userInput, func(d string) {
 			fmt.Fprint(stdout, d)

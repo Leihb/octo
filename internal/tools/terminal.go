@@ -26,20 +26,36 @@ const TerminalTimeout = 30 * time.Second
 // The LLM-facing tool name is "terminal" — calling it "bash" would imply a
 // hard /bin/bash dependency, but the executor actually shells out via
 // `sh -c`.
-type TerminalTool struct{}
+//
+// mgr, when non-nil, is the BackgroundManager used for background:true
+// launches; nil falls back to the process-wide default manager. The field
+// exists so tests can inject an isolated manager.
+type TerminalTool struct{ mgr *BackgroundManager }
+
+func (t TerminalTool) manager() *BackgroundManager {
+	if t.mgr != nil {
+		return t.mgr
+	}
+	return defaultBg
+}
 
 // Definition returns the agent.ToolDefinition the LLM receives in the tools
-// list. The JSON Schema describes a single required "command" string parameter.
+// list. The JSON Schema describes a required "command" string and an optional
+// "background" flag.
 func (TerminalTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "terminal",
-		Description: "Run a shell command (via `sh -c`) and return stdout+stderr. Use for file operations, running programs, searching code, etc.",
+		Description: "Run a shell command (via `sh -c`) and return stdout+stderr. Use for file operations, running programs, searching code, etc. Set background:true for long-running commands (servers, watchers): it returns immediately with a process id (no 30s timeout, non-blocking); read its output later with the terminal_output tool.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command": map[string]any{
 					"type":        "string",
 					"description": "The shell command to execute",
+				},
+				"background": map[string]any{
+					"type":        "boolean",
+					"description": "Run detached in the background (no timeout, non-blocking). Returns a process id; use terminal_output to read its output.",
 				},
 			},
 			"required": []string{"command"},
@@ -67,7 +83,7 @@ func (t TerminalTool) Execute(ctx context.Context, name string, input map[string
 // Scanner buffer cap is 1 MiB per line — commands that emit a single 10MB-
 // long line will get their final line truncated, but the more usual case of
 // many short lines is unaffected.
-func (TerminalTool) ExecuteStream(
+func (t TerminalTool) ExecuteStream(
 	ctx context.Context,
 	_ string,
 	input map[string]any,
@@ -79,6 +95,16 @@ func (TerminalTool) ExecuteStream(
 	}
 	if err := guardCommand(command); err != nil {
 		return "", err
+	}
+
+	// Background launch: detach, no timeout, return the id immediately. The
+	// guard above still applies, so dangerous commands are blocked either way.
+	if bg, _ := input["background"].(bool); bg {
+		id, err := t.manager().Start(command)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Started background process %s.\nRead its output with the terminal_output tool (id: %q).", id, id), nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, TerminalTimeout)
@@ -132,4 +158,68 @@ func (TerminalTool) ExecuteStream(
 		return body + "\n[exit: " + waitErr.Error() + "]", nil
 	}
 	return body, nil
+}
+
+// TerminalOutputTool reads new output (and status) from a background process
+// started by TerminalTool with background:true — the counterpart that makes
+// detached commands useful. It can also kill the process.
+type TerminalOutputTool struct{ mgr *BackgroundManager }
+
+func (t TerminalOutputTool) manager() *BackgroundManager {
+	if t.mgr != nil {
+		return t.mgr
+	}
+	return defaultBg
+}
+
+// Definition describes the required "id" and an optional "kill" flag.
+func (TerminalOutputTool) Definition() agent.ToolDefinition {
+	return agent.ToolDefinition{
+		Name:        "terminal_output",
+		Description: "Read output produced since the last check from a background process (the id returned by terminal with background:true), along with its status (running / exited). Set kill:true to terminate it.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{
+					"type":        "string",
+					"description": "The background process id (e.g. \"bg_1\").",
+				},
+				"kill": map[string]any{
+					"type":        "boolean",
+					"description": "Terminate the process after reading its remaining output.",
+				},
+			},
+			"required": []string{"id"},
+		},
+	}
+}
+
+// Execute returns the new output plus a status line; with kill:true it
+// terminates the process first so the final output is included.
+func (t TerminalOutputTool) Execute(_ context.Context, _ string, input map[string]any) (string, error) {
+	id, _ := input["id"].(string)
+	if id == "" {
+		return "", fmt.Errorf("terminal_output: id is required")
+	}
+	mgr := t.manager()
+
+	var killed bool
+	if kill, _ := input["kill"].(bool); kill {
+		killed = mgr.Kill(id)
+		// Give the process a moment to flush and the waiter to record exit.
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	out, status, found := mgr.Read(id)
+	if !found {
+		return "", fmt.Errorf("terminal_output: no background process %q", id)
+	}
+	header := "[status: " + status + "]"
+	if killed {
+		header = "[killed] " + header
+	}
+	if out == "" {
+		return header + "\n(no new output)", nil
+	}
+	return header + "\n" + out, nil
 }

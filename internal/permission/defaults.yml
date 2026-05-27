@@ -75,6 +75,12 @@ read_file:
   - deny:  { path: ["**/.ssh/id_*", "**/id_rsa*", "**/id_ed25519*", "**/id_ecdsa*", "**/.env", "**/.env.*"] }
   - allow: { path: ["**"] }
 
+# terminal_output reads (and optionally kills) background processes started by
+# this same session via `terminal` background:true — low risk, so allow without
+# prompting. The launching `terminal` call is already gated above.
+terminal_output:
+  - allow: { pattern: "" }
+
 # Pattern-free tools default to allow — they don't have a meaningful
 # axis to gate on, and asking on every glob/grep would be unusable.
 glob:

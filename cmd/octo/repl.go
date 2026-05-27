@@ -11,6 +11,7 @@ import (
 
 	"github.com/Leihb/octo-agent/internal/agent"
 	"github.com/Leihb/octo-agent/internal/permission"
+	"github.com/Leihb/octo-agent/internal/tools"
 	"github.com/Leihb/octo-agent/internal/tui"
 )
 
@@ -33,6 +34,10 @@ type replConfig struct {
 func runREPL(cfg replConfig) int {
 	a := cfg.a
 	sess := cfg.session
+
+	// Kill any background processes (terminal background:true) on exit so none
+	// outlive the session.
+	defer tools.KillAllBackground()
 
 	turns := sess.TurnCount()
 	if turns > 0 {
