@@ -156,6 +156,9 @@ func (c *Client) Send(ctx context.Context, req provider.Request) (provider.Respo
 	if first.Message.Content != "" {
 		blocks = append([]agent.ContentBlock{agent.NewTextBlock(first.Message.Content)}, blocks...)
 	}
+	// Stash the reasoning trace on the tool_use block so it round-trips back to
+	// the API on the follow-up request (required by thinking models).
+	attachReasoning(blocks, first.Message.ReasoningContent)
 
 	return provider.Response{
 		Content:      first.Message.Content,
@@ -223,6 +226,9 @@ func toAPIMessages(systemPrompt string, in []agent.Message) ([]apiMessage, error
 				case "text":
 					msg.Content = b.Text
 				case "tool_use":
+					if b.Reasoning != "" {
+						msg.ReasoningContent = b.Reasoning
+					}
 					msg.ToolCalls = append(msg.ToolCalls, apiToolCall{
 						ID:   b.ID,
 						Type: "function",
@@ -255,6 +261,23 @@ func toAPIMessages(systemPrompt string, in []agent.Message) ([]apiMessage, error
 		out = append(out, apiMessage{Role: string(m.Role), Content: m.Content})
 	}
 	return out, nil
+}
+
+// attachReasoning records a thinking model's reasoning trace on the first
+// tool_use block so it survives in history and is re-sent on the follow-up
+// request. No-op when reasoning is empty or there is no tool_use block — which
+// keeps reasoning_content off plain text turns (some reasoning models reject it
+// there).
+func attachReasoning(blocks []agent.ContentBlock, reasoning string) {
+	if reasoning == "" {
+		return
+	}
+	for i := range blocks {
+		if blocks[i].Type == "tool_use" {
+			blocks[i].Reasoning = reasoning
+			return
+		}
+	}
 }
 
 // marshalInput encodes a tool input map back to a compact JSON string.

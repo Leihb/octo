@@ -43,6 +43,10 @@ type apiMessage struct {
 	Content    string        `json:"content,omitempty"`
 	ToolCalls  []apiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
+	// ReasoningContent is the thinking trace returned by reasoning models
+	// (deepseek-v4 etc.). It must be echoed back on the assistant message that
+	// carries tool_calls, or the next request is rejected; omitted otherwise.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // apiToolCall is one element of apiMessage.ToolCalls (assistant turns).
@@ -141,9 +145,10 @@ type streamChoice struct {
 // streamDelta carries the incremental fields of an assistant message.
 // ToolCalls carries incremental tool call fragments (index-keyed).
 type streamDelta struct {
-	Role      string                `json:"role,omitempty"`
-	Content   string                `json:"content,omitempty"`
-	ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
+	Role             string                `json:"role,omitempty"`
+	Content          string                `json:"content,omitempty"`
+	ReasoningContent string                `json:"reasoning_content,omitempty"`
+	ToolCalls        []streamToolCallDelta `json:"tool_calls,omitempty"`
 }
 
 // streamToolCallDelta is one incremental fragment of a tool call in a stream

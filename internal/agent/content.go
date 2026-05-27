@@ -38,6 +38,13 @@ type ContentBlock struct {
 	// IsError signals that the tool execution failed (type=="tool_result").
 	// The LLM can inspect Result for the error message and recover gracefully.
 	IsError bool `json:"is_error,omitempty"`
+
+	// Reasoning carries a thinking model's reasoning trace that must be echoed
+	// back on the next request (type=="tool_use"). OpenAI thinking models such
+	// as deepseek-v4 return reasoning_content alongside a tool call and reject
+	// the follow-up unless it's resent; the OpenAI adapter stashes it here so it
+	// round-trips through history. Providers that don't need it ignore the field.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // NewTextBlock creates a ContentBlock with Type=="text".
