@@ -38,6 +38,7 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	model := fs.String("model", "", "Model name (defaults to the provider's cheapest reasoning model)")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
 	permMode := fs.String("permission-mode", "strict", "Tool permission handling: interactive | strict")
+	useSandbox := fs.Bool("sandbox", false, "Confine commands to the project dir + tmp with no network (OS-enforced; macOS/Linux). Fails closed if unavailable.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -62,6 +63,12 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	cwd, _ := os.Getwd()
 	env := buildEnvContext(cwd)
+
+	if *useSandbox {
+		if err := activateSandbox(cwd, stderr); err != nil {
+			return 1
+		}
+	}
 
 	a := agent.New(providerSender{p: prov, cacheKey: newCacheKey()}, resolvedModel)
 	a.System = prompt.Compose("", cwd, env)

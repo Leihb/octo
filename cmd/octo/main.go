@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/Leihb/octo-agent/internal/sandbox"
 	"github.com/Leihb/octo-agent/internal/version"
 )
 
@@ -30,6 +31,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "__sandboxed-exec":
+		// Internal: the OS-sandbox re-exec shim (Linux). Applies confinement to
+		// itself, then execs the real command. Not user-facing.
+		return sandbox.ShimMain()
 	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "octo %s\n", version.String())
 		return 0

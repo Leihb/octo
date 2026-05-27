@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"sync"
 )
 
@@ -90,7 +89,11 @@ func NewBackgroundManager() *BackgroundManager {
 // if its context is cancelled (Kill / KillAll).
 func (m *BackgroundManager) Start(command string) (string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd, err := shellCommand(ctx, command)
+	if err != nil {
+		cancel()
+		return "", err
+	}
 
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw

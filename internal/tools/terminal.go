@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -110,7 +109,10 @@ func (t TerminalTool) ExecuteStream(
 	ctx, cancel := context.WithTimeout(ctx, TerminalTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd, err := shellCommand(ctx, command)
+	if err != nil {
+		return "", err
+	}
 
 	// Merge stdout + stderr through a single pipe so the reader sees a
 	// chronological stream. Doing `cmd.Stderr = cmd.Stdout` after StdoutPipe

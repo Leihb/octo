@@ -65,6 +65,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	maxCost := fs.Float64("max-cost", 0, "Stop the session once estimated cost (USD) reaches this; 0 = unlimited")
 	compactThreshold := fs.Int("compact-threshold", 0, "Compact older history once a turn's input crosses this many tokens; 0 = auto (~75% of the model's context window), <0 = disabled")
 	thinkingBudget := fs.Int("thinking-budget", 0, "Enable extended thinking with this token budget (Anthropic/Kimi); 0 = off")
+	useSandbox := fs.Bool("sandbox", false, "Confine terminal commands to the project dir + tmp with no network (OS-enforced; macOS/Linux). Fails closed if unavailable.")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -137,6 +138,12 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// user layer; base/project are recomposed fresh each run.
 	cwd, _ := os.Getwd()
 	env := buildEnvContext(cwd)
+
+	if *useSandbox {
+		if err := activateSandbox(cwd, stderr); err != nil {
+			return 1
+		}
+	}
 
 	// A stable per-process cache key lets OpenAI route every turn (and every
 	// tool-loop iteration) of this conversation to the same prompt cache.

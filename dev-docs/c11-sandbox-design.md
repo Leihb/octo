@@ -96,19 +96,28 @@ non-nil → `sandbox.Command(ctx, command, *activeSandbox)`.
 
 ## 4. macOS mechanism — Seatbelt (SBPL)
 
-Wrap as `sandbox-exec -p <profile> sh -c <command>`. Generated profile:
+Wrap as `sandbox-exec -p <profile> sh -c <command>`. A full `(deny default)`
+profile aborts most binaries (dyld/`/dev`/mach lookups it can't predict), so the
+profile uses an **`allow default` base** and tightens just the axes we care
+about — which proved robust in practice while still enforcing the boundary:
 
 ```scheme
 (version 1)
-(deny default)
-(allow process*)
-(allow sysctl-read)
-(allow file-read-metadata)
-(allow file-read*  (subpath "<read-root>") …)
+(allow default)
+(deny file-write*)
 (allow file-write* (subpath "<write-root>") …)   ; cwd, tmp
-; AllowNetwork=false → no network allows, default-deny covers it
-; AllowNetwork=true  → (allow network*)
+(allow file-write* (literal "/dev/null") …)        ; device nodes
+(deny file-read*  (subpath "<HOME>"))              ; confine reads within $HOME …
+(allow file-read* (subpath "<read-root>") …)       ; … but re-allow the roots
+(deny network*)                                    ; unless AllowNetwork
 ```
+
+Writes are a strict allowlist (deny-all then re-allow roots; the later, more
+specific rule wins). Reads are confined **within `$HOME`**: everything under
+`$HOME` is denied except the read roots, which protects every home secret
+(`~/.ssh`, `~/.aws`, …) while system paths (`/usr`, `/System`) stay readable via
+`allow default`. (This is the one place macOS is looser than Linux: Linux's
+Landlock enforces a *full* read allowlist; macOS confines reads to `$HOME`.)
 
 `sandbox-exec` is marked deprecated by Apple but has no replacement and remains
 functional; it's the mechanism other agent tools use on macOS. `Available()`
