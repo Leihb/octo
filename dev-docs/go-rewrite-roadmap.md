@@ -507,6 +507,56 @@ octo wechat status   # 查看连接状态
 
 ---
 
+## M11 — 自主目标层（autonomous task orchestration）
+
+**目标**：跨会话、跨小时的复杂目标自主推进。`octo task` 起一个任务图（task
+graph），把目标分解成子任务，每个子任务派给独立 sub-agent（M10）跑在**独立
+context** 里；主控只跟任务图状态对话，**不**把累计对话送给评估器。
+
+### 动机（为什么不照搬 Claude Code 的 `/goal`）
+
+Claude Code 的 `/goal` 是 "Stop hook + 评估器读整段对话判断目标是否达成"，
+**架构上和"任务复杂度"成反比**——对话越长越没法用。一旦任务涉及大段 diff、长设
+计讨论、跨多 PR，评估器的 prompt 上限就先爆掉，自驱循环卡死。
+
+Codex 走的是另一条路（也是其 memories 机制里同一思路）：**任务分解 + 独立
+sub-agent + 全局锁**。每个子任务独立 context，主控只看任务图和结果，跟对话累计
+量解耦——这才是为"跨小时/跨天的复杂任务"设计的架构。
+
+octo 走 Codex 路。
+
+### 设计骨架
+
+- **`internal/task`**：`Task{ID, Goal, Status, Subtasks, ResultRefs}`，状态机
+  `pending → running → done | failed`。持久化在 `~/.octo/tasks/<id>.json`，
+  支持跨进程恢复。
+- **`octo task <command>`**：`start <goal>` 创建任务；`status [<id>]` 看进度；
+  `resume <id>` 接续；`cancel <id>`。
+- **分解步骤**：start 时先跑一次规划 side-call（独立 system prompt，类似 C9 的
+  extract 模式），LLM 输出子任务 DAG → 写入 task graph。
+- **执行**：调度器跑 ready 节点（依赖满足的 pending），每个节点 = 一次 M10
+  sub-agent 调用，独立 context，结果写回任务图。可并行（依赖图允许时）。
+- **进度跟踪**：主控不读对话历史，只读任务图。`status` 输出节点状态 + 关键结果
+  摘要。完成条件 = 所有节点 done（或显式 success 节点 done）。
+- **可中断/可恢复**：每个节点结束都 fsync 任务图；进程崩了下次 `octo task resume`
+  从最新状态继续。
+- **跟 `/goal` 的关系**：`octo task` 是命令行入口（重型）；可考虑后续把 REPL 的
+  `/goal` 改为薄壳调 `octo task`，统一架构。
+
+### 依赖与时序
+
+依赖 M10（sub-agent tool）。和 M8 Web Server 互补（Web UI 显示任务图是自然
+配套），但不强耦合。M11 可在 M10 之后任何时间做。
+
+### 验收
+
+- `octo task start "做完 C9 Phase 2 daemon"` → 自动分解 + 推进 + 状态持久化
+- `octo task status <id>` 准确反映 DAG 状态，**不依赖**会话对话历史
+- 进程 kill 后 `octo task resume <id>` 从中断处继续
+- 跨多小时的任务在长 context 失效场景下不崩
+
+---
+
 ## 里程碑时序
 
 ```
@@ -524,7 +574,9 @@ M5 AgentEvent     ←── 基础，影响所有后续
   │     │
   │     └── (M6.5 旁路：M7 仅做 SKILL.md 加载，与 M6.5 解耦，可并行)
   │
-  └── M10 Sub-Agent  ←── 最后做，需要整体稳定
+  ├── M10 Sub-Agent  ←── 单会话 fan-out
+  │
+  └── M11 Autonomous Task ←── 跨会话任务图，依赖 M10
 ```
 
 ---
