@@ -187,6 +187,46 @@ func TestExtractIdleSession_StopsAtCursor(t *testing.T) {
 	}
 }
 
+// ── memorydAlive (chat-side coordination) ──────────────────────────────
+
+func TestMemorydAlive_NoPIDFile(t *testing.T) {
+	fakeHomeForMemoryd(t)
+	if memorydAlive() {
+		t.Error("memorydAlive should be false when no PID file exists")
+	}
+}
+
+func TestMemorydAlive_StalePIDFile(t *testing.T) {
+	if !memoryd.SupportedOnThisOS() {
+		t.Skip("daemon model not supported on this OS")
+	}
+	fakeHomeForMemoryd(t)
+	pidPath, _ := memoryd.PIDFile()
+	if err := memoryd.WritePIDFile(pidPath, 2_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if memoryd.IsRunning(2_000_000_000) {
+		t.Skip("PID 2_000_000_000 happens to be alive on this host")
+	}
+	if memorydAlive() {
+		t.Error("memorydAlive should be false for a stale PID")
+	}
+}
+
+func TestMemorydAlive_AlivePID(t *testing.T) {
+	if !memoryd.SupportedOnThisOS() {
+		t.Skip("daemon model not supported on this OS")
+	}
+	fakeHomeForMemoryd(t)
+	pidPath, _ := memoryd.PIDFile()
+	if err := memoryd.WritePIDFile(pidPath, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if !memorydAlive() {
+		t.Error("memorydAlive should be true when the recorded PID is alive (our own)")
+	}
+}
+
 // writeFakeSession creates a session JSONL file under
 // ~/.octo/sessions/ with the given mtime and a single user/assistant
 // turn so TurnCount > 0. Returns the session id.
