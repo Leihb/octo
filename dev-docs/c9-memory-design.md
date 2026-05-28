@@ -264,3 +264,146 @@ summary 注入。
 - **daemon**：idle 检测（伪造 sessions mtime）、生命周期（start 重复检测 / stop /
   status）、fallback 协调（daemon 在线时 chat 跳过启动时提取）。用临时 `~/.octo`，
   stub provider，不起真网络。
+
+---
+
+## Appendix A — Codex 实测对照（2026-05-28）
+
+读 `~/Projects/github/codex/codex-rs/memories/` 源码后整理。原 §1–§12 的基调和分阶段
+仍然成立（Codex 风格 + 原生 fallback + 三阶段），但**真实实现比调研描述精细一个数量
+级**，几个具体细节调研也漏了或不准；记录在此供 Phase 2/3 设计时参照，避免凭印象。
+
+### A.1 真实架构（不是单一 store）
+
+Codex memories 是**三个 crate + state DB + git baseline**：
+
+| Crate | 职责 |
+|---|---|
+| `memories-read` | read path 注入 + **citations**（条目带 source 引用）+ usage 遥测 |
+| `memories-write` | Phase 1 + Phase 2 + storage + workspace + extensions |
+| `memories-mcp` | 把 memories 目录暴露成**只读 MCP server** 给 sub-agents |
+
+存储两层：
+- **State DB (SQLite)** — Phase 1 输出落这里，含 claim / lease / backoff / 并发上限，
+  防止多个进程或 worker 重复处理同一 rollout。
+- **文件系统 `~/.codex/memories/`** — **本身是 git repo**（`.git/` 在 root 下），用
+  git workspace diff 决定 Phase 2 是否需要跑、得到 deletion 信号、回滚。
+  - `memory_summary.md`（首行 `v1`，**always loaded into system prompt**）
+  - `MEMORY.md`（handbook，按 keyword grep）
+  - `raw_memories.md`（Phase 1 merged 临时输入）
+  - `skills/<name>/SKILL.md`（**整合可以生成 skill！**）
+  - `rollout_summaries/<slug>.md`（每个 rollout 一份详细 recap）
+  - `extensions/<name>/` — 可插拔记忆源（`ad_hoc`、`prune`，外部产物可加入）
+
+### A.2 两阶段（不是单 side-call）
+
+- **Phase 1 — Rollout Extraction (per-thread)**
+  - 触发：**root session 启动时**，异步后台跑（不是 idle 6h；6h 是 Phase 1 *选 rollout*
+    时的过滤阈值，避免动 still-active 的 rollout）。
+  - 用 state DB 做 claim/lease，并行处理多个 rollouts（concurrency cap）。
+  - 模型：独立小模型（`stage_one.MODEL = "gpt-5.4-mini"` + 配置的 reasoning effort）。
+  - **stage-one prompt = 569 行**（调研写"570 行"几乎精确）。
+  - 输出 **JSON**：`{rollout_summary, rollout_slug, raw_memory}`，三者都可能为空（no-op gate）。
+- **Phase 2 — Global Consolidation**
+  - 全局锁（确实存在 — 调研里的"全局锁 sub-agent"指的是这个）。
+  - 加载 Phase 1 outputs（按 `usage_count` + `last_usage`/`generated_at` 排序，过滤 `max_unused_days`）。
+  - sync `raw_memories.md` + `rollout_summaries/`，**git diff** 决定 dirty。
+  - 若 dirty → **spawn 内部 consolidation sub-agent**（不是 inline side-call），
+    限制：no approvals / no network / local write only / no collab（防递归）。
+  - sub-agent 拿 `phase2_workspace_diff.md` 作上下文，自己决定怎么改
+    `memory_summary.md` / `MEMORY.md` / `skills/`。
+  - 完成后 reset git baseline。
+  - **consolidation prompt = 880 行**，有 INIT / INCREMENTAL UPDATE 两个 mode。
+
+### A.3 调研对/错对照
+
+| 调研说 | 实际 | 评 |
+|---|---|---|
+| stage-one prompt 570 行 | 569 行 | ✅ 精确 |
+| idle 6h 触发整合 | 触发是 **session start**；6h idle 是 Phase 1 *选 rollout* 时的过滤 | ⚠️ 调研口径不准 |
+| 全局锁 sub-agent | Phase 2 真的 spawn sub-agent 跑整合 | ✅ 存在 |
+| 独立提取小模型 | gpt-5.4-mini + reasoning | ✅ 印证 |
+| `MEMORY.md` 注册表 + `memory_summary.md` 注入 | ✅，且 summary 首行 `v1` 协议字段 | ✅ 完整 |
+| Codex 没有检索 | 真的没（**memories-mcp** 只暴露 fs，没向量索引） | ✅ 印证 |
+| — | git baseline tracking | 漏 |
+| — | memory extensions（可插拔 sources：`ad_hoc`/`prune`） | 漏 |
+| — | citations（条目带引用） | 漏 |
+| — | 整合可生成 skill（`skills/<name>/SKILL.md`） | 漏 |
+| — | read_path.md 130 行专门 prompt 教模型用 memory | 漏 |
+
+### A.4 stage_one prompt 设计精华
+
+我那 ~20 行 extractSystem 是玩具,Codex 569 行里值得借鉴的核心 pattern：
+
+- **No-op gate**：在产出前显式问"未来 agent 会因为我写的东西做得更好吗?"。如果是
+  one-off 查询 / 临时事实 / 平凡知识 / 没有偏好信号 → 返回**全空字段**。我们也说了
+  "没东西输出 []"，但没有把它做成一个正式的 "minimum signal gate"。
+- **Outcome triage**：每个 task 标 `success | partial | fail | uncertain`，fail/partial
+  时 prompt 强调 prevention rules。我们只有 type 没有 outcome。
+- **Evidence → Implication shape**：
+  `当 <situation>，用户 said "<quote>" → <suggests future default>`。
+  保留 user 原话 + 推断,而非压缩成结论。这是 prompt 整篇都在强调的。
+- **User > Tool output > Assistant**：读 rollout 的优先级。**用户文本是 preference 的
+  最强证据**；assistant brainstorming 不该被当 durable memory 除非用户采纳。
+- **rollout_summary vs raw_memory 双产物**：summary 可以详细（作 reference），
+  raw_memory 严格（durable preference 为主）。我们一条 fact = 一份 entry，没这个分层。
+- **Anti-patterns 显式列出**：avoid generic advice / 大段 raw output / 长 procedural
+  recap / 把 assistant 提议当 durable / "should use X" 推荐语言。
+
+frontmatter 字段也更丰富：`description / task / task_group / task_outcome / cwd / keywords`。
+我们：`name / description / type / created / last_verified`。
+
+### A.5 consolidation prompt 设计精华
+
+- **Progressive disclosure 是显式目标**：summary 始终注入 / `MEMORY.md` grep / rollout
+  summaries 按需读 / skills 模板化复用。和我们的 `RenderInjection`（summary 优先 fallback
+  到 entries）一致，但 Codex 多了 skill 生成层。
+- **INIT vs INCREMENTAL UPDATE 两 mode**：第一次 vs 后续。INIT 时还要建最小骨架文件。
+  我们 PR #96 后实际只有 INCREMENTAL（首次时 priorSummary 空,自然 INIT 化）—— 但没显式
+  分 mode，prompt 措辞也没区分。
+- **Phase 2 决策给 sub-agent 写文件，不是 side-call 拿字符串**。sub-agent 拿 diff，自己
+  决定改哪些文件。我们 ConsolidateMemory 返回 string，cmd 写 `memory_summary.md`。
+
+### A.6 我们 C9 vs Codex 差异表
+
+| 维度 | 我们 C9 Phase 1 | Codex |
+|---|---|---|
+| 触发 | 启动时同步 / Phase 2 daemon idle | Session start 异步后台 |
+| 提取模型 | 主 model（无 override） | 独立小模型 + reasoning effort |
+| 提取 prompt | ~20 行 JSON 输出 | 569 行 + no-op gate + outcome triage |
+| 写入产物 | 单条 `<slug>.md`(typed) | **rollout_summary + raw_memory + slug** 三件 |
+| 整合执行 | side-call 返 string | spawn sub-agent，限权（no net/no approvals/no collab） |
+| 整合 prompt | ~10 行 | 880 行，INIT/INCREMENTAL 两 mode |
+| 整合产物 | `memory_summary.md` | summary + MEMORY.md + skills/ + 修 rollout_summaries |
+| 状态管理 | `.state` JSON（last_extracted_session + last_consolidated） | SQLite state DB（claim/lease/backoff/usage_count/last_usage） |
+| 增长控制 | PR #96 后归档到 `archive/` | git baseline + workspace diff |
+| 检索 | 无（依赖 Phase 3 Hindsight） | 无（read 端纯 fs，sub-agent 经 MCP 访问） |
+| 注入 prompt | 几行 base.md 提示 | 130 行 `read_path.md` + citations |
+
+### A.7 推荐改进（按优先级）
+
+基于上面的对照，C9 后续值得做的改进，按 ROI 排序：
+
+1. **升级 stage_one prompt（高 ROI / 低风险）**——加 no-op gate + outcome triage +
+   evidence→implication shape + user/tool/assistant 优先级。预期：显著提升 extract 质量，
+   减少 like-Pre-commit-workflow-preference 那种空泛重复。
+2. **升级 read_path 注入 prompt**——base.md 的 Memory 段从几行扩到 ~50–100 行，
+   教模型怎么读 memory + citations 概念。预期：模型回答时能 ground 在 memory 上。
+3. **`memory_summary.md` 首行加协议字段**（如 `v1`），便于将来格式升级 + 解析判定。
+4. **git baseline 替换 archive 机制（中 ROI / 中改动）**——`~/.octo/memory/` init 成
+   git repo，整合用 workspace diff 决定 dirty，archive 改为 git history。回滚天然，
+   deletion 信号自然。**这能合并 PR #96 的 archive 逻辑**到 git 模型，更可审计。
+5. **三件套产物**（per-rollout）：rollout_summary + raw_memory + slug。当前是单条 entry，
+   失去了"reference vs durable"的层次。这会涉及 ConsolidateMemory 改签名/重写。
+6. **Memory extensions（低 ROI / 中改动）**——可插拔 sources。本轮可不做，留作 future。
+7. **整合改为 sub-agent 执行**——依赖 M10（sub-agent tool）。Phase 2 daemon 落地时
+   一并考虑。
+
+### A.8 验证来源
+
+读源码片段：
+- `~/Projects/github/codex/codex-rs/memories/README.md`（pipeline 文档）
+- `~/Projects/github/codex/codex-rs/memories/write/lib.rs`（write 入口）
+- `~/Projects/github/codex/codex-rs/memories/write/templates/memories/stage_one_system.md`（569 行）
+- `~/Projects/github/codex/codex-rs/memories/write/templates/memories/consolidation.md`（880 行）
+- `~/Projects/github/codex/codex-rs/memories/read/templates/memories/read_path.md`（130 行）
