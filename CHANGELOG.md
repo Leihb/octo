@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.2.0-dev]
 
-_Nothing yet — recently merged work targets the next milestone (Phase 2 memory daemon, M8 web server, M9 IM bridge, M11 autonomous task orchestration)._
+### Added
+- **M11 — autonomous task orchestration** (#110, #111, #112, #113) — `octo task start "<goal>"` decomposes the goal into a DAG of subtasks via a planner side-call, then dispatches one M10 sub-agent per ready node in parallel, fsync'ing state per transition so a `kill -9` resumes cleanly. The harness drives task-graph state — never sends the accumulated conversation to an evaluator (that's the failure mode of `/goal`-style designs on long tasks). Subcommands:
+  - `octo task start "<goal>" [--plan-only]` — plan + run end-to-end (or just plan).
+  - `octo task run <id>` — execute a previously planned task.
+  - `octo task list` (alias `ls`) — newest-first table of every task.
+  - `octo task status <id>` — full DAG state with per-subtask glyphs (▶ ○ ✓ ✗ ⊘), `blocked_by` lines, one-line result/error snippets.
+  - `octo task show <id> <subtask-id>` — full Description / Started / Finished / Duration / Error / Result for one subtask.
+  - `octo task resume <id>` — resets Failed / Skipped subtasks to Pending and re-runs (Done subtasks keep their results).
+  - `octo task cancel <id>` — marks a task Cancelled.
+
+  New `internal/taskgraph` package owns the Task / Subtask data model + JSON-with-fsync persistence under `~/.octo/tasks/<id>.json`. `agent.PlanTask` is a new side-call with an 80-line planner system prompt (no-op gate, DAG anti-patterns, evidence→implication shape borrowed from the stage_one memory extract). `taskgraph.Scheduler` walks the DAG with **stop-on-first-failure** semantics: a failed subtask marks the whole task Failed and stamps remaining Pending subtasks as Skipped, so `resume` can distinguish "didn't try" from "tried and failed". Foreground execution only in v1 (no daemon). See `dev-docs/go-rewrite-roadmap.md` §M11 for design + acceptance criteria.
 
 ## [0.1.0] — 2026-05-28
 
