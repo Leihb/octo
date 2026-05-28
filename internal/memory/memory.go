@@ -56,6 +56,16 @@ const (
 	stateFile     = ".state"
 	lockName      = ".lock"
 	archiveSubdir = "archive"
+
+	// summaryMarker is the first line of every memory_summary.md octo writes.
+	// It declares the on-disk protocol version so future readers can detect a
+	// breaking schema change without sniffing the body. Older summaries written
+	// before this marker existed are still accepted (stripSummaryMarker is a
+	// no-op on them); newer schemas will use "octo-memory v2", etc.
+	//
+	// Kept as an HTML comment so the marker renders invisibly when a user opens
+	// the file in a Markdown viewer.
+	summaryMarker = "<!-- octo-memory v1 -->"
 )
 
 // Store is a memory directory (default ~/.octo/memory).
@@ -239,10 +249,8 @@ func (s *Store) rebuildIndex() error {
 // Prefers a consolidated memory_summary.md; falls back to a compact list of
 // entry descriptions. Returns "" when there is nothing to inject.
 func (s *Store) RenderInjection() (string, error) {
-	if b, err := os.ReadFile(filepath.Join(s.dir, summaryFile)); err == nil {
-		if sum := strings.TrimSpace(string(b)); sum != "" {
-			return "# Memory (from past sessions)\n\n" + sum, nil
-		}
+	if sum := s.ReadSummary(); sum != "" {
+		return "# Memory (from past sessions)\n\n" + sum, nil
 	}
 	entries, err := s.List()
 	if err != nil || len(entries) == 0 {
@@ -355,21 +363,39 @@ func (s *Store) SaveState(st State) error {
 }
 
 // WriteSummary writes the consolidated memory summary (the injection source,
-// preferred by RenderInjection over the entry list).
+// preferred by RenderInjection over the entry list). The file is prefixed with
+// summaryMarker so a future reader can detect the on-disk protocol version.
 func (s *Store) WriteSummary(summary string) error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(strings.TrimSpace(summary)+"\n"), 0o644)
+	body := summaryMarker + "\n" + strings.TrimSpace(summary) + "\n"
+	return os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(body), 0o644)
 }
 
-// ReadSummary returns the current consolidated summary, or "" if none.
+// ReadSummary returns the current consolidated summary (with the protocol
+// marker stripped) or "" if none. Summaries written before the marker existed
+// pass through unchanged — backward compatibility with the PR-#96 era files.
 func (s *Store) ReadSummary() string {
 	b, err := os.ReadFile(filepath.Join(s.dir, summaryFile))
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(b))
+	return stripSummaryMarker(string(b))
+}
+
+// stripSummaryMarker removes the first-line summaryMarker (if present) and
+// returns the trimmed remainder. Markerless inputs pass through (trimmed).
+func stripSummaryMarker(s string) string {
+	s = strings.TrimLeft(s, "\n\r\t ")
+	if !strings.HasPrefix(s, summaryMarker) {
+		return strings.TrimSpace(s)
+	}
+	rest := strings.TrimPrefix(s, summaryMarker)
+	// Drop the line-terminator that followed the marker (if any) so the next
+	// real line isn't glued to it.
+	rest = strings.TrimLeft(rest, "\r\n")
+	return strings.TrimSpace(rest)
 }
 
 // ArchiveAll moves every active entry to archive/, then rebuilds the index.

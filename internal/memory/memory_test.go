@@ -240,6 +240,65 @@ func TestReadSummary(t *testing.T) {
 	}
 }
 
+func TestWriteSummary_StampsV1Marker(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if err := s.WriteSummary("body content"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(s.dir, summaryFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.HasPrefix(got, summaryMarker) {
+		t.Errorf("summary file should start with %q, got:\n%s", summaryMarker, got)
+	}
+	// The body must still be there after the marker line.
+	if !strings.Contains(got, "body content") {
+		t.Errorf("summary body lost:\n%s", got)
+	}
+}
+
+func TestReadSummary_HidesMarkerFromCallers(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	_ = s.WriteSummary("alpha\nbeta")
+	got := s.ReadSummary()
+	if strings.Contains(got, summaryMarker) {
+		t.Errorf("ReadSummary should strip the marker, got: %q", got)
+	}
+	if got != "alpha\nbeta" {
+		t.Errorf("ReadSummary = %q, want %q", got, "alpha\nbeta")
+	}
+}
+
+func TestReadSummary_AcceptsLegacyMarkerless(t *testing.T) {
+	// Summaries written by the PR-#96 era code had no marker. They must still
+	// read cleanly so the upgrade is non-breaking.
+	s := NewStoreAt(t.TempDir())
+	_ = s.ensureDir()
+	if err := os.WriteFile(filepath.Join(s.dir, summaryFile), []byte("legacy body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ReadSummary(); got != "legacy body" {
+		t.Errorf("legacy markerless summary should pass through, got %q", got)
+	}
+}
+
+func TestRenderInjection_HidesMarker(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	_ = s.WriteSummary("CONSOLIDATED")
+	out, err := s.RenderInjection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, summaryMarker) {
+		t.Errorf("injection should not leak the protocol marker:\n%s", out)
+	}
+	if !strings.Contains(out, "CONSOLIDATED") {
+		t.Errorf("injection missing summary body:\n%s", out)
+	}
+}
+
 func TestExportNotes(t *testing.T) {
 	s := NewStoreAt(t.TempDir())
 	if notes, _ := s.ExportNotes(); notes != "" {
