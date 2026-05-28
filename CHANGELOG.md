@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased — 0.2.0-dev]
+## [Unreleased — 0.3.0-dev]
+
+_Nothing yet — the next batch of milestone work (M8 web server, M9 IM bridge, or the C9 follow-ups like launchd unit files / MCP client) will accumulate here._
+
+## [0.2.0] — 2026-05-28
+
+Adds **M11** (autonomous task orchestration) and closes **C9 Phase 2 + Phase 3** (the memory daemon and the turn-boundary hook surface for retrieval layers like Hindsight).
 
 ### Added
 - **C9 Phase 2 — memory daemon** (#115, #116, #117) — `octo memoryd start|stop|status` runs a long-lived foreground process that takes over the boundary extraction + consolidation passes the chat path runs at startup. Sessions are scanned each tick (15s default); a session whose mtime hasn't moved in 15 minutes is eligible for extraction, so the daemon never races a still-active chat. One session per tick by design — `SIGTERM` never finds the daemon mid-extract for more than one session's worth of LLM time. Provider config read from env (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OCTO_MEMORYD_PROVIDER` override); refuses to start without a key. Chat side detects the daemon via the PID file and skips the in-process memory pass, so REPL startup is effectively instant when the daemon is alive. Windows fail-soft (daemon refuses; chat keeps its Phase 1 path).
