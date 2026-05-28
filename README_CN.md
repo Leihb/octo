@@ -73,11 +73,13 @@ octo chat --list-skills
 
 Octo 的系统提示由若干可选层叠加而成（后者覆盖前者）：
 
+- `~/.octo/soul.md` —— agent 的身份与行为规范（openclaw/hermes 式 persona）。
+- `~/.octo/user.md` —— 你是谁；每次会话都会注入的个人画像。
 - `~/.octo/octorules.md` —— 你的全局、跨项目规则与偏好。
 - `.octorules` —— 随项目提交的仓库级约定。用 `octo init`（或 REPL 里的 `/init`）生成。
 - `--system "..."` —— 单次运行的一次性覆盖。
 
-两个规则文件都支持 `@include path/to/fragment.md` 来引入共享内容。
+身份文件与规则文件都支持 `@include path/to/fragment.md` 来引入共享内容。
 
 ## Skills
 

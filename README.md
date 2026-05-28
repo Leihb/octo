@@ -73,11 +73,13 @@ octo chat --list-skills
 
 Octo composes its system prompt from several optional layers (later overrides earlier):
 
+- `~/.octo/soul.md` — agent identity & behavior, an openclaw/hermes-style persona.
+- `~/.octo/user.md` — who you are; a profile injected into every session.
 - `~/.octo/octorules.md` — your global, cross-project rules and preferences.
 - `.octorules` — per-repo conventions, committed with the project. Generate one with `octo init` (or `/init` in the REPL).
 - `--system "..."` — a one-off override for a single run.
 
-Both rule files support `@include path/to/fragment.md` to pull in shared content.
+The identity and rule files support `@include path/to/fragment.md` to pull in shared content.
 
 ## Skills
 

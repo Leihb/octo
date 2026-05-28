@@ -43,24 +43,28 @@ var userRulesPath = func() string {
 	return filepath.Join(home, ".octo", "octorules.md")
 }
 
-// Compose assembles the session system prompt from up to six layers, in order
-// of increasing specificity:
+// Compose assembles the session system prompt from up to eight layers, in
+// order of increasing specificity:
 //
 //  1. base    — embedded octo foundation (always present)
-//  2. env     — environment snapshot (cwd, git, date, OS) the caller renders
-//  3. skills  — the available-skills manifest the caller renders, if any
-//  4. user    — ~/.octo/octorules.md, if present (cross-project user rules)
-//  5. project — ProjectContextFile in cwd, if present (repo conventions)
-//  6. system  — the --system value, if any (highest-priority override, last)
+//  2. soul    — ~/.octo/soul.md, if present (agent identity & behavior)
+//  3. env     — environment snapshot (cwd, git, date, OS) the caller renders
+//  4. skills  — the available-skills manifest the caller renders, if any
+//  5. profile — ~/.octo/user.md, if present (who the user is)
+//  6. user    — ~/.octo/octorules.md, if present (cross-project user rules)
+//  7. project — ProjectContextFile in cwd, if present (repo conventions)
+//  8. system  — the --system value, if any (highest-priority override, last)
 //
 // Empty layers are skipped. Later layers appear later in the text, which is
 // the conventional way to let more specific instructions take precedence —
 // project rules override the user's global rules, and --system overrides all.
 //
-// skills is the already-rendered manifest (see skills.RenderManifest); it sits
-// near base/env because it's a capability description, not a rule. It is passed
-// in rather than discovered here so this package keeps a one-directional dep
-// (prompt does not import skills) and the prefix stays stable across turns.
+// soul sits right after base: it reshapes persona/behavior, but base's tool
+// and safety norms still precede it. skills is the already-rendered manifest
+// (see skills.RenderManifest), passed in rather than discovered here so this
+// package keeps a one-directional dep (prompt does not import skills) and the
+// prefix stays stable across turns. soul/profile/user/project are read here
+// (single files), like octorules.
 //
 // The user and project files may pull in other files with @include directives
 // (see expandIncludes). env is passed in rather than computed here so this
@@ -69,11 +73,17 @@ var userRulesPath = func() string {
 func Compose(userSystem, cwd, env, skills string) string {
 	layers := []string{strings.TrimSpace(base)}
 
+	if s := readSoul(); s != "" {
+		layers = append(layers, "# Agent identity (~/.octo/soul.md)\n\n"+s)
+	}
 	if e := strings.TrimSpace(env); e != "" {
 		layers = append(layers, e)
 	}
 	if s := strings.TrimSpace(skills); s != "" {
 		layers = append(layers, s)
+	}
+	if p := readUserProfile(); p != "" {
+		layers = append(layers, "# User profile (~/.octo/user.md)\n\n"+p)
 	}
 	if u := readUserContext(); u != "" {
 		layers = append(layers, "# User conventions (~/.octo/octorules.md)\n\n"+u)
@@ -86,6 +96,44 @@ func Compose(userSystem, cwd, env, skills string) string {
 	}
 
 	return strings.Join(layers, "\n\n---\n\n")
+}
+
+// soulPath and userProfilePath return the per-user identity files
+// (~/.octo/soul.md, ~/.octo/user.md), or "" when the home dir can't be
+// resolved. They're vars so tests can point them at temp files, mirroring
+// userRulesPath.
+var soulPath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".octo", "soul.md")
+}
+
+var userProfilePath = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".octo", "user.md")
+}
+
+// readSoul returns the trimmed, include-expanded contents of ~/.octo/soul.md
+// (agent identity & behavior), or "" if it's absent/unreadable/empty.
+func readSoul() string {
+	if p := soulPath(); p != "" {
+		return readContextFile(p)
+	}
+	return ""
+}
+
+// readUserProfile returns the trimmed, include-expanded contents of
+// ~/.octo/user.md (who the user is), or "" if it's absent/unreadable/empty.
+func readUserProfile() string {
+	if p := userProfilePath(); p != "" {
+		return readContextFile(p)
+	}
+	return ""
 }
 
 // readUserContext returns the trimmed, include-expanded contents of the
