@@ -145,9 +145,11 @@ prompt，token 计入会话预算。
 
 `prompt.Compose` 新增 memory 层，注入 `memory_summary.md` 的内容。
 
-- 层位置（在 skills manifest 之后、user octorules 之前——记忆是"跨会话用户上下文"，
-  性质接近 user 规则但更靠前，让用户显式规则仍可覆盖）：
-  `base → env → skills → memory → user → project → system`
+- 层位置（skills 之后、用户身份/规则之前——记忆是"跨会话用户上下文"，让用户显式
+  规则仍可覆盖）：
+  `base → soul → env → skills → memory → user.md → octorules(user) → octorules(project) → --system`
+  其中 `soul` / `user.md` 由独立的**身份文件特性**提供（见 `identity-files-design.md`）；
+  本设计只负责 `memory` 层。
 - 与 skills 一致：caller（cmd/octo）读 `memory_summary.md` 渲染好传入 `Compose`，
   保持 prompt 包不做记忆 IO（单向依赖）。空则跳过该层。
 - 冻结约束同 §2：注入的是会话开始时的 summary，整场不变。
