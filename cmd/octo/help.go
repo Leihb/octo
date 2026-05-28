@@ -51,6 +51,8 @@ Common flags:
   --sandbox                OS-enforced confinement for terminal commands (macOS/Linux)
   --permission-mode <m>    interactive (default; prompts on ask) | strict (denies asks)
   --list-sessions          Print recent sessions and exit
+  --quiet                  Strip status chrome (spinner, banner, cache line)
+  --verbose                Print extra context (provider/model/endpoint, always-on cache line)
 
 Environment:
   ANTHROPIC_API_KEY        Required when --provider=anthropic
@@ -60,6 +62,7 @@ Environment:
   OCTO_HISTORY_FILE        Override the REPL history path (default ~/.octo/history)
   OCTO_HOOK_PRE_TURN       Shell command run at the start of each turn (C9 Phase 3)
   OCTO_HOOK_POST_TURN      Shell command run at the end of each successful turn
+  OCTO_VERBOSITY           quiet | normal | verbose; overridden by --quiet / --verbose
 
 Run "octo chat --help" for the full flag list.`)
 }

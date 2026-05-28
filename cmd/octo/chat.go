@@ -66,6 +66,8 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
 	noMemory := fs.Bool("no-memory", false, "Disable cross-session memory (the remember tool + memory injection)")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
+	quietFlag := fs.Bool("quiet", false, "Strip all status chrome (no spinner, no banner, no cache line). Also OCTO_VERBOSITY=quiet.")
+	verboseFlag := fs.Bool("verbose", false, "Print extra context (provider/model/endpoint, always-on cache line). Also OCTO_VERBOSITY=verbose.")
 	permMode := fs.String("permission-mode", "interactive", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask)")
 	maxTurns := fs.Int("max-turns", 0, "Max provider round-trips per message in the agentic loop (0 = default 20)")
 	maxCost := fs.Float64("max-cost", 0, "Stop the session once estimated cost (USD) reaches this; 0 = unlimited")
@@ -293,17 +295,18 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 
 		cfg := replConfig{
-			a:        a,
-			session:  sess,
-			noSave:   *noSave,
-			plain:    *plain,
-			stdin:    stdin,
-			stdout:   stdout,
-			stderr:   stderr,
-			skillReg: skillReg,
-			memStore: memStore,
-			reader:   replReader,          // shared with the asker / permission gate
-			hooks:    hooks.LoadFromEnv(), // C9 Phase 3: external retrieval layer hooks
+			a:         a,
+			session:   sess,
+			noSave:    *noSave,
+			plain:     *plain,
+			verbosity: resolveVerbosity(*quietFlag, *verboseFlag),
+			stdin:     stdin,
+			stdout:    stdout,
+			stderr:    stderr,
+			skillReg:  skillReg,
+			memStore:  memStore,
+			reader:    replReader,          // shared with the asker / permission gate
+			hooks:     hooks.LoadFromEnv(), // C9 Phase 3: external retrieval layer hooks
 		}
 		if *enableTools {
 			// Spawner is already registered above (before the memory pass) so
@@ -328,16 +331,26 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// ── Single-turn mode (original M2 behaviour) ──────────────────────────────
 	// Reap any background processes the turn spawned (REPL handles its own).
 	defer tools.KillAllBackground()
+	v := resolveVerbosity(*quietFlag, *verboseFlag)
 	if *stream {
+		var spin *spinner
+		if !v.quiet() {
+			spin = newSpinner(stdout, "thinking…")
+			spin.Start(250 * time.Millisecond)
+		}
 		reply, err := a.TurnStream(context.Background(), userInput, func(d string) {
+			spin.Stop()
 			fmt.Fprint(stdout, d)
 		})
+		spin.Stop()
 		if err != nil {
 			fmt.Fprintf(stderr, "\nocto chat: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout)
-		printUsageLine(stderr, reply)
+		if !v.quiet() {
+			printUsageLine(stderr, reply)
+		}
 		return 0
 	}
 
@@ -347,7 +360,9 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintln(stdout, reply.Content)
-	printUsageLine(stderr, reply)
+	if !v.quiet() {
+		printUsageLine(stderr, reply)
+	}
 	return 0
 }
 

@@ -443,3 +443,39 @@ func TestREPLToolEventHandler_PlainForcesEditFileToStatusLine(t *testing.T) {
 		t.Errorf("plain mode should NOT render a card:\n%s", out)
 	}
 }
+
+func TestREPL_QuietMode_SuppressesChrome(t *testing.T) {
+	cfg, stdout, _, _ := makeREPLFixture(t, "ping\n/exit\n")
+	cfg.verbosity = verbosityQuiet
+
+	if code := runREPL(cfg); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	out := stdout.String()
+	// Quiet mode strips: the "Starting session ..." banner, the "Type /help"
+	// hint, and the "Session saved → ..." footer. The model reply itself
+	// must still come through (otherwise quiet would be useless).
+	for _, banned := range []string{"Starting session", "Type /help", "Session saved"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("quiet mode should not emit %q:\n%s", banned, out)
+		}
+	}
+	if !strings.Contains(out, "pong") {
+		t.Errorf("quiet mode must still print the model reply; got:\n%s", out)
+	}
+}
+
+func TestREPL_VerboseMode_PrintsModelAndHints(t *testing.T) {
+	cfg, stdout, _, _ := makeREPLFixture(t, "ping\n/exit\n")
+	cfg.verbosity = verbosityVerbose
+
+	if code := runREPL(cfg); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	out := stdout.String()
+	// Verbose mode adds a `model:` line under the banner. permissions/tools
+	// lines only render when configured (not in this fixture).
+	if !strings.Contains(out, "model: test-model") {
+		t.Errorf("verbose mode should print model line; got:\n%s", out)
+	}
+}

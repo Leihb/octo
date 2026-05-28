@@ -27,6 +27,7 @@ type replConfig struct {
 	session    *agent.Session
 	noSave     bool
 	plain      bool               // true → fall back to terse ↳ status lines for all tool events
+	verbosity  verbosity          // quiet | normal | verbose; controls spinner + chrome
 	permEngine *permission.Engine // nil → no tool-permission gating
 	stdin      io.Reader
 	stdout     io.Writer
@@ -54,18 +55,32 @@ func runREPL(cfg replConfig) int {
 	// outlive the session.
 	defer tools.KillAllBackground()
 
-	turns := sess.TurnCount()
-	if turns > 0 {
-		fmt.Fprintf(cfg.stdout, "Resumed session %s (%d turn", sess.ID, turns)
-		if turns != 1 {
-			fmt.Fprint(cfg.stdout, "s")
+	// Startup banner — fully suppressed in quiet mode, expanded with
+	// provider/endpoint context in verbose mode. Normal keeps today's two
+	// lines because most users use them to confirm the session ID.
+	if !cfg.verbosity.quiet() {
+		turns := sess.TurnCount()
+		if turns > 0 {
+			fmt.Fprintf(cfg.stdout, "Resumed session %s (%d turn", sess.ID, turns)
+			if turns != 1 {
+				fmt.Fprint(cfg.stdout, "s")
+			}
+			fmt.Fprintln(cfg.stdout, ")")
+		} else {
+			fmt.Fprintf(cfg.stdout, "Starting session %s (%s)\n", sess.ID, sess.Model)
 		}
-		fmt.Fprintln(cfg.stdout, ")")
-	} else {
-		fmt.Fprintf(cfg.stdout, "Starting session %s (%s)\n", sess.ID, sess.Model)
+		if cfg.verbosity.verbose() {
+			fmt.Fprintf(cfg.stdout, "  model: %s\n", a.Model)
+			if cfg.permEngine != nil {
+				fmt.Fprintf(cfg.stdout, "  permissions: %s\n", cfg.permEngine.GetMode())
+			}
+			if len(cfg.tools) > 0 {
+				fmt.Fprintf(cfg.stdout, "  tools: %d enabled\n", len(cfg.tools))
+			}
+		}
+		fmt.Fprintln(cfg.stdout, `Type /help for commands, Ctrl-C or /exit to quit.`)
+		fmt.Fprintln(cfg.stdout)
 	}
-	fmt.Fprintln(cfg.stdout, `Type /help for commands, Ctrl-C or /exit to quit.`)
-	fmt.Fprintln(cfg.stdout)
 
 	reader := cfg.reader
 	if reader == nil {
@@ -224,6 +239,14 @@ func runREPL(cfg replConfig) int {
 			reply agent.Reply
 			err   error
 		)
+		// Spinner during the "model is thinking, nothing on screen yet"
+		// pause. Auto-no-ops in quiet mode and non-tty stdout (tests,
+		// pipes). 250ms grace period so a fast reply doesn't blink it.
+		var spin *spinner
+		if !cfg.verbosity.quiet() {
+			spin = newSpinner(cfg.stdout, "thinking…")
+			spin.Start(250 * time.Millisecond)
+		}
 		if len(cfg.tools) > 0 && cfg.executor != nil {
 			// Tool events become inline status lines so the user can see what
 			// the agent is doing instead of staring at a blank terminal while
@@ -232,12 +255,18 @@ func runREPL(cfg replConfig) int {
 			// stdout, etc.) is conversational state for the LLM, not user-
 			// facing chrome. EventTurnDone is also silent; the trailing
 			// newline below marks the visible turn boundary.
-			reply, err = a.RunStream(turnCtx, turnInput, cfg.tools, cfg.executor, replToolEventHandler(cfg.stdout, cfg.plain))
+			inner := replToolEventHandler(cfg.stdout, cfg.plain)
+			reply, err = a.RunStream(turnCtx, turnInput, cfg.tools, cfg.executor, func(ev agent.AgentEvent) {
+				spin.Stop() // idempotent; first event of any kind clears the line
+				inner(ev)
+			})
 		} else {
 			reply, err = a.TurnStream(turnCtx, turnInput, func(delta string) {
+				spin.Stop()
 				fmt.Fprint(cfg.stdout, delta)
 			})
 		}
+		spin.Stop() // belt-and-braces in case the turn produced zero events
 		setTurnCancel(nil)
 		cancelTurn()
 
@@ -263,10 +292,19 @@ func runREPL(cfg replConfig) int {
 			continue
 		default:
 			fmt.Fprintln(cfg.stdout) // newline after streamed reply
-			// Surface cache activity per turn so the win is visible (and tunable).
-			if reply.CacheReadTokens > 0 || reply.CacheWriteTokens > 0 {
-				fmt.Fprintf(cfg.stdout, "  ⓘ cache: %d read, %d write (in %d / out %d)\n",
-					reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens)
+			// Surface cache activity per turn so the win is visible (and
+			// tunable). Suppressed in quiet mode; always-on in verbose
+			// even when cache didn't move (so "cache: 0 read, 0 write" is
+			// a useful debugging signal in verbose).
+			if !cfg.verbosity.quiet() {
+				show := reply.CacheReadTokens > 0 || reply.CacheWriteTokens > 0
+				if cfg.verbosity.verbose() {
+					show = true
+				}
+				if show {
+					fmt.Fprintf(cfg.stdout, "  ⓘ cache: %d read, %d write (in %d / out %d)\n",
+						reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens)
+				}
 			}
 		}
 
@@ -288,8 +326,10 @@ func runREPL(cfg replConfig) int {
 			fmt.Fprintf(cfg.stderr, "session save: %v\n", err)
 			return 1
 		}
-		path, _ := sess.SavePath()
-		fmt.Fprintf(cfg.stdout, "\nSession saved → %s\n", path)
+		if !cfg.verbosity.quiet() {
+			path, _ := sess.SavePath()
+			fmt.Fprintf(cfg.stdout, "\nSession saved → %s\n", path)
+		}
 	}
 	return 0
 }
