@@ -398,3 +398,67 @@ func TestRunChat_OpenAI_StreamingEndToEnd(t *testing.T) {
 		t.Errorf("stdout should contain streamed reply; got: %q", stdout.String())
 	}
 }
+
+// TestRunChat_ResumedToolSession_AutoEnablesTools covers the fix for the
+// "garbled XML tool calls" bug. When a previously tool-enabled session is
+// resumed without --tools, the model sees prior tool_use blocks in
+// history but no tools array in the request — and falls back to emitting
+// tool calls as text. The fix pre-loads the session, checks UsedTools,
+// and re-enables --tools with a one-line notice.
+func TestRunChat_ResumedToolSession_AutoEnablesTools(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	// Seed a session whose history includes a tool_use block (mirrors what
+	// a real tool-enabled session looks like on disk).
+	sess := agent.NewSession("test-model", "")
+	sess.Messages = []agent.Message{
+		{Role: agent.RoleUser, Content: "list files"},
+		{Role: agent.RoleAssistant, Blocks: []agent.ContentBlock{
+			agent.NewToolUseBlock("call_1", "terminal", map[string]any{"command": "ls"}),
+		}},
+	}
+	if err := sess.Save(); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+
+	// Resume WITHOUT --tools. Provide immediate EOF so the REPL exits cleanly.
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"-c", sess.ID}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "re-enabling them") {
+		t.Errorf("expected auto-enable notice in stdout; got:\n%s", stdout.String())
+	}
+}
+
+// TestRunChat_ResumedPlainSession_NoAutoEnable confirms the auto-enable
+// notice is NOT printed for a session that didn't use tools — we don't
+// want to nag every resume.
+func TestRunChat_ResumedPlainSession_NoAutoEnable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	sess := agent.NewSession("test-model", "")
+	sess.Messages = []agent.Message{
+		{Role: agent.RoleUser, Content: "hi"},
+		{Role: agent.RoleAssistant, Content: "hello"},
+	}
+	if err := sess.Save(); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"-c", sess.ID}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "re-enabling them") {
+		t.Errorf("plain session should not trigger auto-enable; got:\n%s", stdout.String())
+	}
+}

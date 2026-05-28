@@ -163,6 +163,22 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		resumeID = resolved
 	}
 
+	// Sticky --tools across resumes. If the session being resumed has
+	// tool_use blocks in its history but the user forgot to pass --tools
+	// on the resume command, the request would go out without a tools
+	// array — and the model, seeing prior tool calls but unable to make
+	// new structured ones, falls back to emitting tool calls as text
+	// (a wall of `<tool_calls><invoke name="...">...` XML). Auto-
+	// enabling here avoids the footgun; a one-line notice tells the
+	// user what happened so they can disable it next time if they
+	// genuinely want a tools-off resume.
+	if isREPL && resumeID != "" && !*enableTools {
+		if peek, perr := agent.LoadSession(resumeID); perr == nil && peek.UsedTools() {
+			fmt.Fprintln(stdout, "Notice: this session used --tools previously; re-enabling them.")
+			*enableTools = true
+		}
+	}
+
 	prov, err := buildProvider(*providerName, stderr)
 	if err != nil {
 		return 1

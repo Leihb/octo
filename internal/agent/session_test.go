@@ -388,3 +388,33 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestSession_UsedTools_PlainMessagesIsFalse(t *testing.T) {
+	s := &Session{Messages: []Message{
+		{Role: RoleUser, Content: "hi"},
+		{Role: RoleAssistant, Content: "hello"},
+	}}
+	if s.UsedTools() {
+		t.Error("plain text session should not be UsedTools()")
+	}
+}
+
+func TestSession_UsedTools_ToolUseBlockIsTrue(t *testing.T) {
+	s := &Session{Messages: []Message{
+		{Role: RoleUser, Content: "list files"},
+		{Role: RoleAssistant, Blocks: []ContentBlock{
+			NewTextBlock("I'll list them"),
+			NewToolUseBlock("call_1", "terminal", map[string]any{"command": "ls"}),
+		}},
+	}}
+	if !s.UsedTools() {
+		t.Error("session with a tool_use block should be UsedTools()=true")
+	}
+}
+
+func TestSession_UsedTools_EmptyMessagesIsFalse(t *testing.T) {
+	s := &Session{}
+	if s.UsedTools() {
+		t.Error("empty session should not be UsedTools()")
+	}
+}

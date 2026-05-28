@@ -63,6 +63,24 @@ func (s *Session) TurnCount() int {
 	return len(s.Messages) / 2
 }
 
+// UsedTools reports whether any assistant message in the session emitted
+// at least one tool_use block. Used by the chat resume path to decide
+// whether to auto-enable --tools — without that, a resumed session whose
+// history contains tool_use blocks would be sent to the model with no
+// tools array, and the model (seeing prior tool calls in the conversation
+// but unable to make new structured ones) falls back to emitting tool
+// calls as text. That looks like garbled XML to the user.
+func (s *Session) UsedTools() bool {
+	for _, m := range s.Messages {
+		for _, b := range m.Blocks {
+			if b.Type == "tool_use" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // sessionsDir returns (and creates if needed) ~/.octo/sessions.
 func sessionsDir() (string, error) {
 	home, err := os.UserHomeDir()
