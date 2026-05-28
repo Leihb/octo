@@ -10,6 +10,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,6 +53,7 @@ type Entry struct {
 const (
 	indexFile   = "MEMORY.md"
 	summaryFile = "memory_summary.md"
+	stateFile   = ".state"
 	lockName    = ".lock"
 )
 
@@ -96,8 +98,14 @@ type frontmatter struct {
 // store lock. Name and Description are required; an unknown Type normalizes to
 // reference; Created is set on first write, LastVerified always refreshed.
 func (s *Store) Save(e Entry) error {
-	if strings.TrimSpace(e.Name) == "" || strings.TrimSpace(e.Description) == "" {
-		return fmt.Errorf("memory: Name and Description are required")
+	if strings.TrimSpace(e.Description) == "" {
+		return fmt.Errorf("memory: Description is required")
+	}
+	if strings.TrimSpace(e.Name) == "" {
+		e.Name = Slugify(e.Description)
+	}
+	if e.Name == "" {
+		return fmt.Errorf("memory: could not derive a name from the description")
 	}
 	if !validType(e.Type) {
 		e.Type = TypeReference
@@ -289,4 +297,86 @@ func (s *Store) lock() (func(), error) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// Slugify turns text into a kebab-case filename stem (lowercase alphanumerics,
+// runs of other chars collapsed to one dash), capped so filenames stay sane.
+func Slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 50 {
+		out = strings.Trim(out[:50], "-")
+	}
+	return out
+}
+
+// State tracks what the boundary-extraction/consolidation triggers have already
+// done, so startup doesn't re-extract the same session or over-consolidate.
+type State struct {
+	LastExtractedSession string `json:"last_extracted_session"`
+	LastConsolidated     string `json:"last_consolidated"` // YYYY-MM-DD
+}
+
+// LoadState reads .state; a missing/unreadable file yields a zero State.
+func (s *Store) LoadState() State {
+	var st State
+	b, err := os.ReadFile(filepath.Join(s.dir, stateFile))
+	if err != nil {
+		return st
+	}
+	_ = json.Unmarshal(b, &st)
+	return st
+}
+
+// SaveState writes .state.
+func (s *Store) SaveState(st State) error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(s.dir, stateFile), b, 0o644)
+}
+
+// WriteSummary writes the consolidated memory summary (the injection source,
+// preferred by RenderInjection over the entry list).
+func (s *Store) WriteSummary(summary string) error {
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(strings.TrimSpace(summary)+"\n"), 0o644)
+}
+
+// ExportNotes renders all entries as plain text for the consolidation
+// side-call (name, type, description, body per entry).
+func (s *Store) ExportNotes() (string, error) {
+	entries, err := s.List()
+	if err != nil || len(entries) == 0 {
+		return "", err
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		fmt.Fprintf(&b, "- [%s] %s\n", e.Type, e.Description)
+		if e.Body != "" {
+			for _, line := range strings.Split(e.Body, "\n") {
+				fmt.Fprintf(&b, "  %s\n", line)
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }

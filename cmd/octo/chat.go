@@ -169,16 +169,14 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	skillsManifest := skills.RenderManifest(skillReg)
 	tools.SetSkills(skillReg)
 
-	// Cross-session memory (C9): the store backs the `remember` tool and renders
-	// this session's memory injection. --no-memory disables both. A store error
+	// Cross-session memory (C9): the store backs the `remember` tool and (below)
+	// renders this session's injection. --no-memory disables both. A store error
 	// (e.g. unresolvable home dir) degrades to no memory rather than failing.
-	var memInjection string
 	var memStore *memory.Store
 	if !*noMemory {
 		if store, err := memory.NewStore(); err == nil {
 			memStore = store
 			tools.SetMemoryStore(store)
-			memInjection, _ = store.RenderInjection()
 		}
 	}
 
@@ -197,11 +195,23 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		thinkingBudget: *thinkingBudget,
 		thinkingOut:    stdout,
 	}, resolvedModel)
-	a.System = prompt.Compose(*system, cwd, env, skillsManifest, memInjection)
 	a.MaxTokens = *maxTokens
 	a.MaxTurns = *maxTurns
 	a.MaxCostUSD = *maxCost
 	a.CompactThreshold = *compactThreshold
+
+	// Boundary memory (REPL only): extract durable facts from the previous
+	// session and consolidate if due, BEFORE rendering this session's injection
+	// so freshly captured facts apply immediately rather than a session later.
+	// Skips the session being resumed. Best-effort — errors don't block startup.
+	if isREPL && memStore != nil {
+		maybeProcessMemory(a, memStore, stdout, resumeID)
+	}
+	var memInjection string
+	if memStore != nil {
+		memInjection, _ = memStore.RenderInjection()
+	}
+	a.System = prompt.Compose(*system, cwd, env, skillsManifest, memInjection)
 
 	// ── REPL mode ────────────────────────────────────────────────────────────
 	if isREPL {

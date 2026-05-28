@@ -36,16 +36,6 @@ func TestSave_GetRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSave_RequiresNameAndDescription(t *testing.T) {
-	s := NewStoreAt(t.TempDir())
-	if err := s.Save(Entry{Description: "x"}); err == nil {
-		t.Error("expected error for missing Name")
-	}
-	if err := s.Save(Entry{Name: "x"}); err == nil {
-		t.Error("expected error for missing Description")
-	}
-}
-
 func TestSave_UnknownTypeDefaultsReference(t *testing.T) {
 	s := NewStoreAt(t.TempDir())
 	if err := s.Save(Entry{Name: "n", Description: "d", Type: "bogus"}); err != nil {
@@ -120,6 +110,77 @@ func TestRenderInjection(t *testing.T) {
 	out, _ = s.RenderInjection()
 	if !strings.Contains(out, "CONSOLIDATED SUMMARY") || strings.Contains(out, "prefers Go") {
 		t.Errorf("summary should take precedence over entry list:\n%s", out)
+	}
+}
+
+func TestSave_AutoSlugFromDescription(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if err := s.Save(Entry{Description: "Run tests before committing!", Type: TypeFeedback}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := s.List()
+	if len(entries) != 1 || entries[0].Name != "run-tests-before-committing" {
+		t.Errorf("Save should auto-slug from description, got %+v", entries)
+	}
+}
+
+func TestSave_RequiresDescription(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if err := s.Save(Entry{Type: TypeUser}); err == nil {
+		t.Error("expected error for missing description (no source for auto-slug)")
+	}
+}
+
+func TestSlugify(t *testing.T) {
+	cases := map[string]string{
+		"Run tests before committing!": "run-tests-before-committing",
+		"  Hello, World  ":             "hello-world",
+		"用户偏好 Go":                      "go",
+		"!!! ":                         "",
+	}
+	for in, want := range cases {
+		if got := Slugify(in); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestState_RoundTrip(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if st := s.LoadState(); st.LastExtractedSession != "" || st.LastConsolidated != "" {
+		t.Errorf("missing state should be zero: %+v", st)
+	}
+	in := State{LastExtractedSession: "sess-123", LastConsolidated: "2026-05-28"}
+	if err := s.SaveState(in); err != nil {
+		t.Fatal(err)
+	}
+	got := s.LoadState()
+	if got != in {
+		t.Errorf("State round-trip: %+v, want %+v", got, in)
+	}
+}
+
+func TestWriteSummary_PreferredByInjection(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	_ = s.Save(Entry{Description: "prefers Go", Type: TypeUser})
+	if err := s.WriteSummary("CONSOLIDATED"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := s.RenderInjection()
+	if !strings.Contains(out, "CONSOLIDATED") || strings.Contains(out, "prefers Go") {
+		t.Errorf("WriteSummary should be preferred over entries:\n%s", out)
+	}
+}
+
+func TestExportNotes(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if notes, _ := s.ExportNotes(); notes != "" {
+		t.Errorf("empty store ExportNotes = %q, want empty", notes)
+	}
+	_ = s.Save(Entry{Description: "prefers Go", Type: TypeUser, Body: "User said so."})
+	notes, _ := s.ExportNotes()
+	if !strings.Contains(notes, "[user] prefers Go") || !strings.Contains(notes, "User said so") {
+		t.Errorf("ExportNotes missing pieces:\n%s", notes)
 	}
 }
 
