@@ -39,6 +39,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "octo %s\n", version.String())
 		return 0
 	case "help", "--help", "-h":
+		// "octo help <cmd>" prints the rich per-command help (examples, env
+		// vars, key flags). Bare "octo help" prints the top-level command
+		// list. Unknown subcommand → exit 2 so scripts can tell the diff
+		// between "user asked for help" and "user typo'd".
+		if len(args) > 1 {
+			if !printCommandHelp(args[1], stdout) {
+				fmt.Fprintf(stderr, "octo help: no help available for %q\n", args[1])
+				fmt.Fprintln(stderr, "Run `octo help` to see the command list.")
+				return 2
+			}
+			return 0
+		}
 		printUsage(stdout)
 		return 0
 	case "chat":
@@ -72,5 +84,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  version    Print the version and exit")
 	fmt.Fprintln(w, "  help       Print this help and exit")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Run `octo chat --help` for chat-specific flags.")
+	fmt.Fprintln(w, "Run `octo help <command>` for examples + env vars (e.g. `octo help chat`),")
+	fmt.Fprintln(w, "or `octo <command> --help` for the full flag list.")
 }

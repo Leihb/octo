@@ -269,8 +269,13 @@ func TestRunTaskStatus_UnknownIDErrors(t *testing.T) {
 	if code := runTask([]string{"status", "missing"}, nil, &out, &errBuf); code != 2 {
 		t.Errorf("unknown id exit = %d, want 2; stderr=%q", code, errBuf.String())
 	}
-	if !strings.Contains(errBuf.String(), "no task matches") {
-		t.Errorf("expected 'no task matches' error, got:\n%s", errBuf.String())
+	got := errBuf.String()
+	if !strings.Contains(got, "no task matches") {
+		t.Errorf("expected 'no task matches' error, got:\n%s", got)
+	}
+	// UX-3: the CLI wraps the resolver error with a discovery hint.
+	if !strings.Contains(got, "octo task list") {
+		t.Errorf("expected 'octo task list' hint, got:\n%s", got)
 	}
 }
 

@@ -153,6 +153,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		resolved, err := agent.ResolveSessionID(resumeID)
 		if err != nil {
 			fmt.Fprintf(stderr, "octo chat: %v\n", err)
+			fmt.Fprintln(stderr, "Run `octo chat --list-sessions` to see what's available.")
 			return 2
 		}
 		resumeID = resolved
@@ -369,7 +370,15 @@ func buildProvider(name string, stderr io.Writer) (provider.Provider, error) {
 	case providerAnthropic:
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
 		if apiKey == "" {
-			fmt.Fprintln(stderr, "octo chat: ANTHROPIC_API_KEY environment variable is not set")
+			fmt.Fprintln(stderr, "octo: ANTHROPIC_API_KEY is not set.")
+			fmt.Fprintln(stderr, "")
+			fmt.Fprintln(stderr, "To use Anthropic (default):")
+			fmt.Fprintln(stderr, "  1. Get a key at https://console.anthropic.com/")
+			fmt.Fprintln(stderr, "  2. export ANTHROPIC_API_KEY=sk-ant-...")
+			fmt.Fprintln(stderr, "")
+			fmt.Fprintln(stderr, "Or use OpenAI:")
+			fmt.Fprintln(stderr, "  export OPENAI_API_KEY=sk-...")
+			fmt.Fprintln(stderr, "  octo chat --provider openai")
 			return nil, errors.New("missing ANTHROPIC_API_KEY")
 		}
 		client, err := anthropic.New(apiKey)
@@ -385,7 +394,15 @@ func buildProvider(name string, stderr io.Writer) (provider.Provider, error) {
 	case providerOpenAI:
 		apiKey := os.Getenv("OPENAI_API_KEY")
 		if apiKey == "" {
-			fmt.Fprintln(stderr, "octo chat: OPENAI_API_KEY environment variable is not set")
+			fmt.Fprintln(stderr, "octo: OPENAI_API_KEY is not set.")
+			fmt.Fprintln(stderr, "")
+			fmt.Fprintln(stderr, "To use OpenAI:")
+			fmt.Fprintln(stderr, "  1. Get a key at https://platform.openai.com/api-keys")
+			fmt.Fprintln(stderr, "  2. export OPENAI_API_KEY=sk-...")
+			fmt.Fprintln(stderr, "")
+			fmt.Fprintln(stderr, "Or use Anthropic (the default):")
+			fmt.Fprintln(stderr, "  export ANTHROPIC_API_KEY=sk-ant-...")
+			fmt.Fprintln(stderr, "  octo chat                 # no --provider flag needed")
 			return nil, errors.New("missing OPENAI_API_KEY")
 		}
 		client, err := openai.New(apiKey)

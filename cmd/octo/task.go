@@ -270,6 +270,7 @@ func runTaskRun(args []string, stdout, stderr io.Writer) int {
 	resolvedID, err := store.ResolveID(id)
 	if err != nil {
 		fmt.Fprintf(stderr, "octo task run: %v\n", err)
+		fmt.Fprintln(stderr, "Run `octo task list` to see what's available.")
 		return 2
 	}
 	sch := taskgraph.NewScheduler(store, &spawnerExecutor{}, stdout)
@@ -318,6 +319,7 @@ func runTaskStatus(args []string, stdout, stderr io.Writer) int {
 	id, err := store.ResolveID(args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "octo task status: %v\n", err)
+		fmt.Fprintln(stderr, "Run `octo task list` to see what's available.")
 		return 2
 	}
 	t, err := store.Get(id)
@@ -387,6 +389,7 @@ func runTaskShow(args []string, stdout, stderr io.Writer) int {
 	id, err := store.ResolveID(args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "octo task show: %v\n", err)
+		fmt.Fprintln(stderr, "Run `octo task list` to see what's available.")
 		return 2
 	}
 	t, err := store.Get(id)
@@ -448,6 +451,7 @@ func runTaskResume(args []string, stdout, stderr io.Writer) int {
 	id, err := store.ResolveID(rawID)
 	if err != nil {
 		fmt.Fprintf(stderr, "octo task resume: %v\n", err)
+		fmt.Fprintln(stderr, "Run `octo task list` to see what's available.")
 		return 2
 	}
 
@@ -532,6 +536,7 @@ func runTaskCancel(args []string, stdout, stderr io.Writer) int {
 	id, err := store.ResolveID(args[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "octo task cancel: %v\n", err)
+		fmt.Fprintln(stderr, "Run `octo task list` to see what's available.")
 		return 2
 	}
 	t, err := store.Update(id, func(t *taskgraph.Task) error {

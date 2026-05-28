@@ -40,8 +40,18 @@ func TestRunChat_MissingAPIKey(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(stderr.String(), "ANTHROPIC_API_KEY") {
-		t.Errorf("stderr should mention env var; got: %q", stderr.String())
+	// New (UX-3) actionable error: identifies the missing env var AND points
+	// the user at the signup URL + alternative provider so the first-run
+	// experience isn't a dead-end.
+	out := stderr.String()
+	for _, want := range []string{
+		"ANTHROPIC_API_KEY",
+		"console.anthropic.com",
+		"--provider openai",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stderr should mention %q; got:\n%s", want, out)
+		}
 	}
 }
 
@@ -134,8 +144,40 @@ func TestRunChat_OpenAI_MissingAPIKey(t *testing.T) {
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(stderr.String(), "OPENAI_API_KEY") {
-		t.Errorf("stderr should mention env var; got: %q", stderr.String())
+	// New (UX-3) actionable error: points the user at the OpenAI signup
+	// URL plus the Anthropic fallback so a missing key has a path forward.
+	out := stderr.String()
+	for _, want := range []string{
+		"OPENAI_API_KEY",
+		"platform.openai.com",
+		"ANTHROPIC_API_KEY",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stderr should mention %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestRunChat_UnknownResumeID exercises the UX-3 hint that follows a failed
+// session resume: the resolver itself reports "no session matches", and the
+// chat wrapper adds a pointer to --list-sessions so the user knows where to
+// look for valid IDs.
+func TestRunChat_UnknownResumeID(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	var stdout, stderr bytes.Buffer
+	code := runChat([]string{"-c", "no-such-thing"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, "no session matches") {
+		t.Errorf("stderr should report no match; got:\n%s", out)
+	}
+	if !strings.Contains(out, "octo chat --list-sessions") {
+		t.Errorf("stderr should hint at --list-sessions; got:\n%s", out)
 	}
 }
 

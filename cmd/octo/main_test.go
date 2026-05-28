@@ -66,3 +66,51 @@ func TestRun_UnknownCommand(t *testing.T) {
 		t.Errorf("stderr should mention 'unknown command'; got: %q", stderr.String())
 	}
 }
+
+func TestRun_HelpWithSubcommand_PrintsRichHelp(t *testing.T) {
+	cases := []struct {
+		cmd      string
+		wantHits []string
+	}{
+		{"chat", []string{"octo chat", "Examples:", "ANTHROPIC_API_KEY", "octo chat -c last"}},
+		{"task", []string{"octo task", "Examples:", "ID shortcuts", "octo task start"}},
+		{"memory", []string{"octo memory", "octo memory list"}},
+		{"init", []string{"octo init", ".octorules"}},
+		{"memoryd", []string{"octo memoryd", "PID file", "octo memoryd start"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"help", tc.cmd}, strings.NewReader(""), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0; stderr=%q", code, stderr.String())
+			}
+			for _, want := range tc.wantHits {
+				if !strings.Contains(stdout.String(), want) {
+					t.Errorf("help %s missing %q in output:\n%s", tc.cmd, want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRun_HelpWithUnknownSubcommand_Exits2(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"help", "bogus"}, strings.NewReader(""), &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "no help available") {
+		t.Errorf("stderr should explain missing help; got %q", stderr.String())
+	}
+}
+
+func TestRun_TopLevelHelp_PointsToPerCommandHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	run([]string{"help"}, strings.NewReader(""), &stdout, &stderr)
+	// Verify the footer advertises the new `octo help <command>` form so users
+	// can discover the rich per-command help.
+	if !strings.Contains(stdout.String(), "octo help <command>") {
+		t.Errorf("top-level help missing 'octo help <command>' pointer:\n%s", stdout.String())
+	}
+}
