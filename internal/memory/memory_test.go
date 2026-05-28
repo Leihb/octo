@@ -172,6 +172,74 @@ func TestWriteSummary_PreferredByInjection(t *testing.T) {
 	}
 }
 
+func TestArchiveAll_MovesEntriesAndRebuildsIndex(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	_ = s.Save(Entry{Description: "first", Type: TypeUser})
+	_ = s.Save(Entry{Description: "second", Type: TypeFeedback})
+
+	if err := s.ArchiveAll(); err != nil {
+		t.Fatal(err)
+	}
+	// Active list is now empty.
+	if active, _ := s.List(); len(active) != 0 {
+		t.Errorf("after ArchiveAll, List should be empty: %+v", active)
+	}
+	// Archived list contains both.
+	archived, err := s.ListArchived()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived) != 2 {
+		t.Fatalf("expected 2 archived entries, got %d", len(archived))
+	}
+	// Index was rebuilt (and now empty).
+	b, err := os.ReadFile(filepath.Join(s.dir, indexFile))
+	if err != nil {
+		t.Fatalf("index missing after archive: %v", err)
+	}
+	if strings.Contains(string(b), "first") || strings.Contains(string(b), "second") {
+		t.Errorf("index should not list archived entries:\n%s", string(b))
+	}
+}
+
+func TestArchiveAll_PreservesArchivedContent(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	_ = s.Save(Entry{Description: "a fact", Type: TypeProject, Body: "the body"})
+	_ = s.ArchiveAll()
+
+	archived, _ := s.ListArchived()
+	if len(archived) != 1 || archived[0].Body != "the body" || archived[0].Description != "a fact" {
+		t.Errorf("archived entry lost content: %+v", archived)
+	}
+}
+
+func TestArchiveAll_OverwritesPriorArchive(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	// First round: save and archive.
+	_ = s.Save(Entry{Name: "n", Description: "v1", Type: TypeUser})
+	_ = s.ArchiveAll()
+	// Second round: same name, new content — Save then Archive again.
+	_ = s.Save(Entry{Name: "n", Description: "v2", Type: TypeUser})
+	if err := s.ArchiveAll(); err != nil {
+		t.Fatal(err)
+	}
+	archived, _ := s.ListArchived()
+	if len(archived) != 1 || archived[0].Description != "v2" {
+		t.Errorf("archive should keep the latest version, got %+v", archived)
+	}
+}
+
+func TestReadSummary(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if got := s.ReadSummary(); got != "" {
+		t.Errorf("missing summary = %q, want empty", got)
+	}
+	_ = s.WriteSummary("hello world")
+	if got := s.ReadSummary(); got != "hello world" {
+		t.Errorf("ReadSummary = %q, want %q", got, "hello world")
+	}
+}
+
 func TestExportNotes(t *testing.T) {
 	s := NewStoreAt(t.TempDir())
 	if notes, _ := s.ExportNotes(); notes != "" {

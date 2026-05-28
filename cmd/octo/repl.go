@@ -254,26 +254,53 @@ func printReplHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /exit       Save and exit  (also: /quit, Ctrl-C, Ctrl-D)")
 }
 
-// printMemory lists the cross-session memory entries, or a hint when memory is
-// off / empty.
+// printMemory shows what cross-session memory looks like: active entries
+// (not yet consolidated), the consolidated summary (the actual injection
+// source), and a pointer to the archive. Off / empty states are reported.
 func printMemory(w io.Writer, store *memory.Store) {
 	if store == nil {
 		fmt.Fprintln(w, "Memory is disabled for this session (--no-memory).")
 		return
 	}
-	entries, err := store.List()
+	active, err := store.List()
 	if err != nil {
 		fmt.Fprintf(w, "memory: %v\n", err)
 		return
 	}
-	if len(entries) == 0 {
+	archived, _ := store.ListArchived()
+	summary := store.ReadSummary()
+
+	if len(active) == 0 && summary == "" && len(archived) == 0 {
 		fmt.Fprintln(w, "Nothing remembered yet.")
 		return
 	}
-	fmt.Fprintln(w, "Remembered across sessions:")
-	for _, e := range entries {
-		fmt.Fprintf(w, "  [%-9s] %s\n", e.Type, e.Description)
+
+	if len(active) > 0 {
+		fmt.Fprintln(w, "Active entries (not yet consolidated):")
+		for _, e := range active {
+			fmt.Fprintf(w, "  [%-9s] %s\n", e.Type, e.Description)
+		}
 	}
+	if summary != "" {
+		if len(active) > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintln(w, "Consolidated summary (injected next session):")
+		for _, line := range strings.Split(summary, "\n") {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
+	if len(archived) > 0 {
+		fmt.Fprintf(w, "\n(%d archived entr%s — `octo memory list --archive` to view)\n",
+			len(archived), pluralEntries(len(archived)))
+	}
+}
+
+func pluralEntries(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // reservedReplCommands are the built-in slash commands; a skill may not shadow

@@ -107,16 +107,32 @@ func TestExtractMemory_SenderError(t *testing.T) {
 func TestConsolidateMemory(t *testing.T) {
 	s := &stubExtractSender{reply: "Consolidated summary."}
 	a := New(s, "test-model")
-	out, err := a.ConsolidateMemory(context.Background(), "- [user] prefers Go")
+	out, err := a.ConsolidateMemory(context.Background(), "", "- [user] prefers Go")
 	if err != nil || out != "Consolidated summary." {
 		t.Errorf("ConsolidateMemory out=%q err=%v", out, err)
 	}
-	if !strings.Contains(s.lastSystem, "consolidate") {
+	if !strings.Contains(s.lastSystem, "summary") {
 		t.Errorf("should use consolidate system prompt, got %q", s.lastSystem)
 	}
-	// Empty notes → empty summary, no call.
-	out, _ = a.ConsolidateMemory(context.Background(), "")
-	if out != "" {
-		t.Errorf("empty notes should return empty, got %q", out)
+	// Both arguments empty → short-circuit to empty, no call.
+	s.lastMessages = nil
+	out, _ = a.ConsolidateMemory(context.Background(), "", "")
+	if out != "" || s.lastMessages != nil {
+		t.Errorf("empty inputs should short-circuit; out=%q msgs=%v", out, s.lastMessages)
+	}
+}
+
+func TestConsolidateMemory_IncrementalPrompt(t *testing.T) {
+	s := &stubExtractSender{reply: "merged"}
+	a := New(s, "test-model")
+	if _, err := a.ConsolidateMemory(context.Background(), "PRIOR_SUMMARY_XYZ", "NEW_NOTE_ABC"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.lastMessages) == 0 {
+		t.Fatal("expected a SendMessages call")
+	}
+	prompt := s.lastMessages[0].Content
+	if !strings.Contains(prompt, "PRIOR_SUMMARY_XYZ") || !strings.Contains(prompt, "NEW_NOTE_ABC") {
+		t.Errorf("prompt should carry both prior summary and new notes:\n%s", prompt)
 	}
 }

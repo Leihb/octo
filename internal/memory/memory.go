@@ -51,10 +51,11 @@ type Entry struct {
 }
 
 const (
-	indexFile   = "MEMORY.md"
-	summaryFile = "memory_summary.md"
-	stateFile   = ".state"
-	lockName    = ".lock"
+	indexFile     = "MEMORY.md"
+	summaryFile   = "memory_summary.md"
+	stateFile     = ".state"
+	lockName      = ".lock"
+	archiveSubdir = "archive"
 )
 
 // Store is a memory directory (default ~/.octo/memory).
@@ -362,8 +363,115 @@ func (s *Store) WriteSummary(summary string) error {
 	return os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(strings.TrimSpace(summary)+"\n"), 0o644)
 }
 
-// ExportNotes renders all entries as plain text for the consolidation
-// side-call (name, type, description, body per entry).
+// ReadSummary returns the current consolidated summary, or "" if none.
+func (s *Store) ReadSummary() string {
+	b, err := os.ReadFile(filepath.Join(s.dir, summaryFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// ArchiveAll moves every active entry to archive/, then rebuilds the index.
+// Use after a successful consolidation: the entries are preserved as
+// authoritative sources (in archive/) but no longer feed the consolidation or
+// the injection fallback, so neither grows unbounded.
+func (s *Store) ArchiveAll() error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	entries, err := s.List()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	archiveDir := filepath.Join(s.dir, archiveSubdir)
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		src := filepath.Join(s.dir, e.Name+".md")
+		dst := filepath.Join(archiveDir, e.Name+".md")
+		// If an archived file with the same name already exists, overwrite —
+		// the active version is more recent.
+		_ = os.Remove(dst)
+		if err := os.Rename(src, dst); err != nil {
+			return err
+		}
+	}
+	return s.rebuildIndex()
+}
+
+// ListArchived returns all archived entries, sorted by name. Archived entries
+// remain queryable as authoritative sources but do not feed the consolidation
+// or injection paths.
+func (s *Store) ListArchived() ([]Entry, error) {
+	archiveDir := filepath.Join(s.dir, archiveSubdir)
+	ents, err := os.ReadDir(archiveDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []Entry
+	for _, de := range ents {
+		name := de.Name()
+		if de.IsDir() || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		e, ok, err := s.readArchived(name)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) readArchived(file string) (Entry, bool, error) {
+	b, err := os.ReadFile(filepath.Join(s.dir, archiveSubdir, file))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Entry{}, false, nil
+		}
+		return Entry{}, false, err
+	}
+	front, body, ok := splitFrontmatter(string(b))
+	if !ok {
+		return Entry{}, false, nil
+	}
+	var fm frontmatter
+	if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
+		return Entry{}, false, nil
+	}
+	name := fm.Name
+	if name == "" {
+		name = strings.TrimSuffix(file, ".md")
+	}
+	t := Type(fm.Type)
+	if !validType(t) {
+		t = TypeReference
+	}
+	return Entry{
+		Name:         name,
+		Description:  strings.TrimSpace(fm.Description),
+		Type:         t,
+		Created:      fm.Created,
+		LastVerified: fm.LastVerified,
+		Body:         strings.TrimSpace(body),
+	}, true, nil
+}
+
+// ExportNotes renders all (active, non-archived) entries as plain text for the
+// consolidation side-call (name, type, description, body per entry).
 func (s *Store) ExportNotes() (string, error) {
 	entries, err := s.List()
 	if err != nil || len(entries) == 0 {

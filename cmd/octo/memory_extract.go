@@ -71,17 +71,26 @@ func consolidateIfDue(ctx context.Context, a *agent.Agent, store *memory.Store, 
 	if !consolidateDue(*st, store) {
 		return
 	}
-	notes, err := store.ExportNotes()
-	if err != nil || notes == "" {
-		return
+	newNotes, err := store.ExportNotes()
+	if err != nil || newNotes == "" {
+		return // no new active entries — nothing to fold in
 	}
-	summary, err := a.ConsolidateMemory(ctx, notes)
+	priorSummary := store.ReadSummary()
+	summary, err := a.ConsolidateMemory(ctx, priorSummary, newNotes)
 	if err != nil || summary == "" {
 		return
 	}
-	if store.WriteSummary(summary) == nil {
-		st.LastConsolidated = time.Now().Format("2006-01-02")
+	if err := store.WriteSummary(summary); err != nil {
+		return
 	}
+	// Archive the active entries that were just folded into the summary, so
+	// neither the next consolidation's input nor the injection fallback grows
+	// unbounded. A failure here leaves them active and they'll be re-folded
+	// next time — idempotent (same facts in, same summary out).
+	if err := store.ArchiveAll(); err != nil {
+		return
+	}
+	st.LastConsolidated = time.Now().Format("2006-01-02")
 }
 
 func consolidateDue(st memory.State, store *memory.Store) bool {

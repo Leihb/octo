@@ -31,13 +31,17 @@ transient state, or anything likely to change next session. Quality over
 quantity — most turns yield nothing. If nothing qualifies, output exactly [].
 No prose, no code fences around the array unless you must — just the JSON.`
 
-// consolidateSystem instructs the consolidation side-call to fold the current
-// memory notes into a compact summary (dedupe, drop stale, keep load-bearing).
-const consolidateSystem = `You consolidate a coding agent's cross-session memory notes into a compact
-summary for injection into future sessions. Merge duplicates, drop anything
+// consolidateSystem instructs the consolidation side-call to maintain (rather
+// than rebuild) a summary: it gets the current summary plus any new notes since
+// the last pass and emits the updated summary. This keeps the input bounded as
+// the memory store grows.
+const consolidateSystem = `You maintain a coding agent's cross-session memory summary. You will receive
+the current consolidated summary (which may be empty on the first pass) and
+any new memory notes added since the last consolidation. Produce the UPDATED
+summary: fold the new notes into the existing summary, dedupe, drop anything
 stale or trivial, and keep the load-bearing facts. Be terse — bullet points,
 grouped loosely by kind (who the user is, how they like to work, ongoing
-project context, useful references). Output only the summary text.`
+project context, useful references). Output only the updated summary text.`
 
 // MemoryFact is one extracted fact (the JSON shape the extraction side-call
 // returns). type maps to memory.Type at the call site.
@@ -71,16 +75,34 @@ func (a *Agent) ExtractMemory(ctx context.Context, msgs []Message) ([]MemoryFact
 	return parseFacts(reply.Content)
 }
 
-// ConsolidateMemory runs the consolidation side-call over the rendered current
-// notes and returns the consolidated summary text.
-func (a *Agent) ConsolidateMemory(ctx context.Context, notes string) (string, error) {
+// ConsolidateMemory runs the (incremental) consolidation side-call: it folds
+// newNotes into priorSummary and returns the updated summary. Either argument
+// may be empty — empty priorSummary means "first pass"; empty newNotes means
+// "no new material" and the call short-circuits.
+func (a *Agent) ConsolidateMemory(ctx context.Context, priorSummary, newNotes string) (string, error) {
 	if a.Sender == nil {
 		return "", fmt.Errorf("agent: no Sender configured")
 	}
-	if strings.TrimSpace(notes) == "" {
+	priorSummary = strings.TrimSpace(priorSummary)
+	newNotes = strings.TrimSpace(newNotes)
+	if priorSummary == "" && newNotes == "" {
 		return "", nil
 	}
-	req := []Message{NewUserMessage("Current memory notes:\n\n" + notes + "\n\nConsolidate per your instructions.")}
+
+	var prompt strings.Builder
+	if priorSummary != "" {
+		prompt.WriteString("Current consolidated summary:\n\n")
+		prompt.WriteString(priorSummary)
+		prompt.WriteString("\n\n")
+	}
+	if newNotes != "" {
+		prompt.WriteString("New memory notes since last consolidation:\n\n")
+		prompt.WriteString(newNotes)
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString("Produce the updated consolidated summary per your instructions.")
+
+	req := []Message{NewUserMessage(prompt.String())}
 	reply, err := a.Sender.SendMessages(ctx, a.Model, consolidateSystem, req, extractMaxTokens)
 	if err != nil {
 		return "", err
