@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -13,7 +12,7 @@ import (
 
 // replAsker implements tools.Asker by prompting on the REPL's shared
 // stdin/stdout. Same plumbing as cliPermissionGate — both run synchronously
-// inside RunStream, so they share the scanner without racing on it.
+// inside RunStream, so they share the line reader without racing on it.
 //
 // UX:
 //
@@ -28,11 +27,11 @@ import (
 // "Other" tail is always added and lets the user type a free-text answer
 // instead of choosing.
 type replAsker struct {
-	in  *bufio.Scanner // shared with the REPL loop
+	in  lineReader // shared with the REPL loop
 	out io.Writer
 }
 
-func newREPLAsker(in *bufio.Scanner, out io.Writer) *replAsker {
+func newREPLAsker(in lineReader, out io.Writer) *replAsker {
 	return &replAsker{in: in, out: out}
 }
 
@@ -42,9 +41,9 @@ func (a *replAsker) Ask(_ context.Context, q tools.AskRequest) (tools.AskRespons
 		return tools.AskResponse{Cancelled: true}, nil
 	}
 
-	a.printQuestion(q)
+	prompt := a.printQuestion(q)
 
-	raw, ok := a.readLine()
+	raw, ok := a.in.ReadLine(prompt)
 	if !ok {
 		// EOF or empty submission → treat as cancellation. An empty answer
 		// to a forced-pick prompt isn't a valid selection, and surfacing
@@ -86,8 +85,7 @@ func (a *replAsker) Ask(_ context.Context, q tools.AskRequest) (tools.AskRespons
 	_ = pickedSlot
 
 	if wantOther {
-		fmt.Fprint(a.out, "  Other (free text): ")
-		text, ok := a.readLine()
+		text, ok := a.in.ReadLine("  Other (free text): ")
 		if !ok || strings.TrimSpace(text) == "" {
 			return tools.AskResponse{Cancelled: true}, nil
 		}
@@ -100,7 +98,11 @@ func (a *replAsker) Ask(_ context.Context, q tools.AskRequest) (tools.AskRespons
 	return tools.AskResponse{Choices: picks}, nil
 }
 
-func (a *replAsker) printQuestion(q tools.AskRequest) {
+// printQuestion writes the multi-line question card and returns the final
+// inline "Select [...]: " prompt — which is passed to ReadLine so that
+// readline can render it correctly (e.g. preserving line position for
+// history navigation).
+func (a *replAsker) printQuestion(q tools.AskRequest) string {
 	header := q.Header
 	if header == "" {
 		header = "question"
@@ -117,14 +119,7 @@ func (a *replAsker) printQuestion(q tools.AskRequest) {
 	if q.MultiSelect {
 		hint = "[comma-separated, e.g. 1,3]"
 	}
-	fmt.Fprintf(a.out, "  Select %s: ", hint)
-}
-
-func (a *replAsker) readLine() (string, bool) {
-	if !a.in.Scan() {
-		return "", false
-	}
-	return a.in.Text(), true
+	return fmt.Sprintf("  Select %s: ", hint)
 }
 
 // parseSelection converts the user's typed answer into a list of 1-based

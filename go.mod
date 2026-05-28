@@ -5,6 +5,8 @@ go 1.22
 require (
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/chzyer/readline v1.5.1
+	github.com/mattn/go-isatty v0.0.20
 	golang.org/x/sys v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -17,7 +19,6 @@ require (
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"strings"
@@ -15,8 +14,8 @@ import (
 // can assert both the user answer and the displayed UI.
 func askInput(input string) (*replAsker, *bytes.Buffer) {
 	out := &bytes.Buffer{}
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	return newREPLAsker(scanner, out), out
+	reader := newScannerLineReader(strings.NewReader(input), out)
+	return newREPLAsker(reader, out), out
 }
 
 func TestReplAsker_PrintsQuestionAndOptions(t *testing.T) {

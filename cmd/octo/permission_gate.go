@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -20,7 +19,7 @@ import (
 // path is never reached — Check just returns the denial with its reason.
 type cliPermissionGate struct {
 	engine *permission.Engine
-	in     *bufio.Scanner // shared with the REPL loop; reads one line per prompt
+	in     lineReader // shared with the REPL loop; reads one line per prompt
 	out    io.Writer
 }
 
@@ -45,11 +44,12 @@ func (g *cliPermissionGate) Check(_ context.Context, name string, input map[stri
 func (g *cliPermissionGate) prompt(name string, input map[string]any) (bool, string) {
 	fmt.Fprintf(g.out, "\n⚠ permission: %s wants to run\n", name)
 	fmt.Fprintf(g.out, "    %s\n", summariseInput(input))
-	fmt.Fprint(g.out, "  allow? [y]es / [a]lways this session / [N]o: ")
 
 	answer := ""
-	if g.in != nil && g.in.Scan() {
-		answer = strings.ToLower(strings.TrimSpace(g.in.Text()))
+	if g.in != nil {
+		if raw, ok := g.in.ReadLine("  allow? [y]es / [a]lways this session / [N]o: "); ok {
+			answer = strings.ToLower(strings.TrimSpace(raw))
+		}
 	}
 
 	switch answer {

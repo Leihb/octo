@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.3.0-dev]
 
-_Nothing yet — the next batch of milestone work (M8 web server, M9 IM bridge, or the C9 follow-ups like launchd unit files / MCP client) will accumulate here._
+### Added
+- **REPL line editing + history (UX-1)** — `octo chat` now drives the prompt through `chzyer/readline` when stdin is an interactive terminal: up/down arrow recall a persistent history at `~/.octo/history` (override via `OCTO_HISTORY_FILE`), Ctrl-A / Ctrl-E / Ctrl-W and the usual readline editing keys work, and a trailing `\` continues the input onto a `... ` continuation line (bash-style; doubled `\\` is a literal). At an idle prompt Ctrl-C clears the line instead of exiting (use `/exit` or Ctrl-D), matching `bash` / `zsh` convention. The asker (`ask_user_question`) and the permission gate share the same line reader, so the `Other (free text)` and `allow? [y/a/N]` prompts get history + editing too. Non-tty stdin (pipes, tests, `octo chat < input.txt`) keeps the existing scanner path verbatim — no behaviour change there. First of five planned CLI-UX PRs; see `dev-docs/go-rewrite-roadmap.md` for the rest (ID shortcuts, error messages + `octo help`, status feedback + verbosity, shell completion).
 
 ## [0.2.0] — 2026-05-28
 

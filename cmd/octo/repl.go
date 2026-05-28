@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -37,11 +36,12 @@ type replConfig struct {
 	skillReg   *skills.Registry // discovered skills; backs /skills and /<name>
 	memStore   *memory.Store    // cross-session memory; backs /memory (nil → disabled)
 	hooks      *hooks.Runner    // C9 Phase 3 pre/post-turn hooks; nil-safe via Configured()
-	// scanner, when non-nil, is the stdin reader to use instead of building
-	// one fresh inside runREPL. Set by cmd/octo when the asker / spawner need
-	// the same scanner the loop will read from (no double-buffering). Tests
-	// that only pass cfg.stdin leave this nil and runREPL builds its own.
-	scanner *bufio.Scanner
+	// reader, when non-nil, is the line reader to use instead of building
+	// one fresh inside runREPL. Set by cmd/octo so the same instance is
+	// shared with the permission gate and the ask_user_question asker.
+	// Tests that only pass cfg.stdin leave this nil; runREPL builds a
+	// scanner-backed reader over stdin for them.
+	reader lineReader
 }
 
 // runREPL runs the interactive multi-turn loop until the user exits or EOF.
@@ -67,15 +67,18 @@ func runREPL(cfg replConfig) int {
 	fmt.Fprintln(cfg.stdout, `Type /help for commands, Ctrl-C or /exit to quit.`)
 	fmt.Fprintln(cfg.stdout)
 
-	scanner := cfg.scanner
-	if scanner == nil {
-		scanner = bufio.NewScanner(cfg.stdin)
+	reader := cfg.reader
+	if reader == nil {
+		reader = newScannerLineReader(cfg.stdin, cfg.stdout)
 	}
+	defer reader.Close()
 
 	// Ctrl-C handling: while a turn is running, SIGINT cancels just that turn
 	// (the loop catches context.Canceled, finalizes well-formed history, and
 	// returns to the prompt). At an idle prompt — no turn in flight — SIGINT
-	// exits cleanly, preserving the documented "Ctrl-C to quit" behaviour.
+	// behaviour depends on the reader: readline catches it and returns
+	// ErrInterrupt (we just re-prompt), while scanner mode falls through to
+	// the signal handler which saves and exits.
 	var (
 		turnMu     sync.Mutex
 		turnCancel context.CancelFunc
@@ -97,39 +100,49 @@ func runREPL(cfg replConfig) int {
 				c() // interrupt the in-flight turn; the loop returns to prompt
 				continue
 			}
-			// Idle prompt: save what we have and exit cleanly. os.Exit skips the
-			// deferred cleanup below, so do it explicitly here.
-			fmt.Fprintln(cfg.stdout, "\n^C")
-			if !cfg.noSave {
-				sess.SyncFrom(a.History)
-				_ = sess.Save()
+			// Idle prompt with the scanner reader (no built-in SIGINT
+			// handling): save and exit. The readline reader catches Ctrl-C
+			// itself (returns ErrInterrupt), so this branch never fires in
+			// interactive mode — its loop just re-prompts on the next pass.
+			if _, ok := reader.(*scannerLineReader); ok {
+				fmt.Fprintln(cfg.stdout, "\n^C")
+				if !cfg.noSave {
+					sess.SyncFrom(a.History)
+					_ = sess.Save()
+				}
+				tools.KillAllBackground()
+				os.Exit(0)
 			}
-			tools.KillAllBackground()
-			os.Exit(0)
 		}
 	}()
 
-	// Permission gating shares the REPL scanner so an interactive "ask"
-	// prompt reads from the same stdin buffer the loop uses. Tool dispatch
-	// runs synchronously inside RunStream (which blocks this loop), so there
-	// is no concurrent access to the scanner.
+	// Permission gating shares the REPL line reader so an interactive "ask"
+	// prompt reads from the same stdin the loop uses. Tool dispatch runs
+	// synchronously inside RunStream (which blocks this loop), so there is
+	// no concurrent access to the reader.
 	if cfg.permEngine != nil {
 		a.Gate = &cliPermissionGate{
 			engine: cfg.permEngine,
-			in:     scanner,
+			in:     reader,
 			out:    cfg.stdout,
 		}
 	}
 
 	for {
-		fmt.Fprint(cfg.stdout, "you> ")
-
-		if !scanner.Scan() {
+		raw, ok := readPromptLine(reader, "you> ", "... ")
+		if !ok {
+			if reader.Interrupted() {
+				// Ctrl-C at an idle prompt under readline: just re-loop so
+				// the user can keep typing. Matches the convention in
+				// bash/zsh — Ctrl-C clears the current line but doesn't
+				// exit the shell.
+				continue
+			}
 			// EOF (Ctrl-D) or read error.
 			fmt.Fprintln(cfg.stdout)
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(raw)
 		if line == "" {
 			continue
 		}

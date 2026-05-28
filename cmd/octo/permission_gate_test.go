@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"strings"
@@ -19,7 +18,7 @@ func newGate(t *testing.T, mode permission.Mode, stdin string) (*cliPermissionGa
 	var out bytes.Buffer
 	g := &cliPermissionGate{
 		engine: eng,
-		in:     bufio.NewScanner(strings.NewReader(stdin)),
+		in:     newScannerLineReader(strings.NewReader(stdin), &out),
 		out:    &out,
 	}
 	return g, &out
