@@ -43,17 +43,18 @@ var userRulesPath = func() string {
 	return filepath.Join(home, ".octo", "octorules.md")
 }
 
-// Compose assembles the session system prompt from up to eight layers, in
+// Compose assembles the session system prompt from up to nine layers, in
 // order of increasing specificity:
 //
 //  1. base    — embedded octo foundation (always present)
 //  2. soul    — ~/.octo/soul.md, if present (agent identity & behavior)
 //  3. env     — environment snapshot (cwd, git, date, OS) the caller renders
 //  4. skills  — the available-skills manifest the caller renders, if any
-//  5. profile — ~/.octo/user.md, if present (who the user is)
-//  6. user    — ~/.octo/octorules.md, if present (cross-project user rules)
-//  7. project — ProjectContextFile in cwd, if present (repo conventions)
-//  8. system  — the --system value, if any (highest-priority override, last)
+//  5. memory  — cross-session memory the caller renders, if any (C9)
+//  6. profile — ~/.octo/user.md, if present (who the user is)
+//  7. user    — ~/.octo/octorules.md, if present (cross-project user rules)
+//  8. project — ProjectContextFile in cwd, if present (repo conventions)
+//  9. system  — the --system value, if any (highest-priority override, last)
 //
 // Empty layers are skipped. Later layers appear later in the text, which is
 // the conventional way to let more specific instructions take precedence —
@@ -70,7 +71,7 @@ var userRulesPath = func() string {
 // (see expandIncludes). env is passed in rather than computed here so this
 // package stays pure (no os/exec, no git); the caller snapshots it once at
 // session start, which keeps the cached prompt prefix stable across turns.
-func Compose(userSystem, cwd, env, skills string) string {
+func Compose(userSystem, cwd, env, skills, memory string) string {
 	layers := []string{strings.TrimSpace(base)}
 
 	if s := readSoul(); s != "" {
@@ -81,6 +82,9 @@ func Compose(userSystem, cwd, env, skills string) string {
 	}
 	if s := strings.TrimSpace(skills); s != "" {
 		layers = append(layers, s)
+	}
+	if m := strings.TrimSpace(memory); m != "" {
+		layers = append(layers, m)
 	}
 	if p := readUserProfile(); p != "" {
 		layers = append(layers, "# User profile (~/.octo/user.md)\n\n"+p)

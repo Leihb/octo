@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/memory"
 	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/prompt"
 	"github.com/Leihb/octo-agent/internal/provider"
@@ -61,6 +62,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	listSessions := fs.Bool("list-sessions", false, "Print the 10 most recent sessions and exit")
 	listSkills := fs.Bool("list-skills", false, "Print available skills (user + project) and exit")
 	enableTools := fs.Bool("tools", false, "Enable built-in tools (bash) for agentic loop")
+	noMemory := fs.Bool("no-memory", false, "Disable cross-session memory (the remember tool + memory injection)")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
 	permMode := fs.String("permission-mode", "interactive", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask)")
 	maxTurns := fs.Int("max-turns", 0, "Max provider round-trips per message in the agentic loop (0 = default 20)")
@@ -167,6 +169,19 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	skillsManifest := skills.RenderManifest(skillReg)
 	tools.SetSkills(skillReg)
 
+	// Cross-session memory (C9): the store backs the `remember` tool and renders
+	// this session's memory injection. --no-memory disables both. A store error
+	// (e.g. unresolvable home dir) degrades to no memory rather than failing.
+	var memInjection string
+	var memStore *memory.Store
+	if !*noMemory {
+		if store, err := memory.NewStore(); err == nil {
+			memStore = store
+			tools.SetMemoryStore(store)
+			memInjection, _ = store.RenderInjection()
+		}
+	}
+
 	if *useSandbox {
 		opts := sandboxOpts{allowNet: *sandboxAllowNet, writeRoots: sandboxWrite, readRoots: sandboxRead}
 		if err := activateSandbox(cwd, opts, stderr); err != nil {
@@ -182,7 +197,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		thinkingBudget: *thinkingBudget,
 		thinkingOut:    stdout,
 	}, resolvedModel)
-	a.System = prompt.Compose(*system, cwd, env, skillsManifest)
+	a.System = prompt.Compose(*system, cwd, env, skillsManifest, memInjection)
 	a.MaxTokens = *maxTokens
 	a.MaxTurns = *maxTurns
 	a.MaxCostUSD = *maxCost
@@ -205,7 +220,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			}
 			// Recompose from the session's raw user layer so base/project/env
 			// pick up any changes since the session was created.
-			a.System = prompt.Compose(sess.System, cwd, env, skillsManifest)
+			a.System = prompt.Compose(sess.System, cwd, env, skillsManifest, memInjection)
 		} else {
 			sess = agent.NewSession(resolvedModel, *system)
 		}
@@ -219,6 +234,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			stdout:   stdout,
 			stderr:   stderr,
 			skillReg: skillReg,
+			memStore: memStore,
 		}
 		if *enableTools {
 			cfg.tools = tools.DefaultTools()

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/memory"
 	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/skills"
 	"github.com/Leihb/octo-agent/internal/tools"
@@ -33,6 +34,7 @@ type replConfig struct {
 	tools      []agent.ToolDefinition
 	executor   agent.ToolExecutor
 	skillReg   *skills.Registry // discovered skills; backs /skills and /<name>
+	memStore   *memory.Store    // cross-session memory; backs /memory (nil → disabled)
 }
 
 // runREPL runs the interactive multi-turn loop until the user exits or EOF.
@@ -161,6 +163,9 @@ func runREPL(cfg replConfig) int {
 			case "/skills":
 				printSkills(cfg.stdout, cfg.skillReg)
 				continue
+			case "/memory":
+				printMemory(cfg.stdout, cfg.memStore)
+				continue
 			default:
 				fmt.Fprintf(cfg.stdout, "Unknown command %q. Type /help for a list.\n", cmd)
 				continue
@@ -245,7 +250,30 @@ func printReplHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /save       Save the session now (it also auto-saves after each turn)")
 	fmt.Fprintln(w, "  /sessions   List the 10 most recent sessions")
 	fmt.Fprintln(w, "  /skills     List available skills (trigger one with /<name>)")
+	fmt.Fprintln(w, "  /memory     List what's remembered across sessions")
 	fmt.Fprintln(w, "  /exit       Save and exit  (also: /quit, Ctrl-C, Ctrl-D)")
+}
+
+// printMemory lists the cross-session memory entries, or a hint when memory is
+// off / empty.
+func printMemory(w io.Writer, store *memory.Store) {
+	if store == nil {
+		fmt.Fprintln(w, "Memory is disabled for this session (--no-memory).")
+		return
+	}
+	entries, err := store.List()
+	if err != nil {
+		fmt.Fprintf(w, "memory: %v\n", err)
+		return
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(w, "Nothing remembered yet.")
+		return
+	}
+	fmt.Fprintln(w, "Remembered across sessions:")
+	for _, e := range entries {
+		fmt.Fprintf(w, "  [%-9s] %s\n", e.Type, e.Description)
+	}
 }
 
 // reservedReplCommands are the built-in slash commands; a skill may not shadow
