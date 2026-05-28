@@ -51,10 +51,11 @@ type Entry struct {
 }
 
 const (
-	indexFile   = "MEMORY.md"
-	summaryFile = "memory_summary.md"
-	stateFile   = ".state"
-	lockName    = ".lock"
+	indexFile           = "MEMORY.md"
+	summaryFile         = "memory_summary.md"
+	stateFile           = ".state"
+	lockName            = ".lock"
+	rolloutSummariesDir = "rollout_summaries"
 
 	// summaryMarker is the first line of every memory_summary.md octo writes.
 	// It declares the on-disk protocol version so future readers can detect a
@@ -424,6 +425,90 @@ func (s *Store) WriteSummary(summary string) error {
 	}
 	s.maybeCommit("consolidate: write summary")
 	return nil
+}
+
+// RolloutSummary is one entry in rollout_summaries/ — the per-session
+// narrative reference doc (the "what happened this session" artifact).
+type RolloutSummary struct {
+	Filename string // <timestamp>-<slug>.md, relative to rollout_summaries/
+	Slug     string
+	Created  string // YYYY-MM-DD-HHMMSS, from the filename prefix
+	Body     string
+}
+
+// SaveRolloutSummary writes a per-session narrative reference to
+// rollout_summaries/<timestamp>-<slug>.md. Empty body or slug is a no-op
+// (the extraction's no-op gate routinely returns empty). When git is
+// enabled the write is auto-committed.
+//
+// The timestamp prefix keeps rollout summaries chronologically sortable on
+// disk; the slug makes them identifiable.
+func (s *Store) SaveRolloutSummary(slug, body string) error {
+	slug = strings.TrimSpace(slug)
+	body = strings.TrimSpace(body)
+	if slug == "" || body == "" {
+		return nil
+	}
+	if err := s.ensureDir(); err != nil {
+		return err
+	}
+	dir := filepath.Join(s.dir, rolloutSummariesDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	stamp := time.Now().UTC().Format("20060102-150405")
+	name := stamp + "-" + Slugify(slug) + ".md"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body+"\n"), 0o644); err != nil {
+		return err
+	}
+	s.maybeCommit("rollout-summary: " + Slugify(slug))
+	return nil
+}
+
+// ListRolloutSummaries returns every per-rollout summary, sorted by filename
+// (which sorts chronologically because of the timestamp prefix). A missing
+// directory yields nil,nil — no rollouts recorded yet.
+func (s *Store) ListRolloutSummaries() ([]RolloutSummary, error) {
+	dir := filepath.Join(s.dir, rolloutSummariesDir)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []RolloutSummary
+	for _, de := range ents {
+		name := de.Name()
+		if de.IsDir() || !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		stem := strings.TrimSuffix(name, ".md")
+		stamp, slug := splitRolloutFilename(stem)
+		out = append(out, RolloutSummary{
+			Filename: name,
+			Slug:     slug,
+			Created:  stamp,
+			Body:     strings.TrimSpace(string(b)),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Filename < out[j].Filename })
+	return out, nil
+}
+
+// splitRolloutFilename splits "<YYYYMMDD-HHMMSS>-<slug>" into the two halves.
+// The stamp prefix is 15 chars + a dash; anything after is the slug. If the
+// shape doesn't match, the whole stem is treated as the slug with no stamp.
+func splitRolloutFilename(stem string) (stamp, slug string) {
+	// Expected prefix: 8 digits, dash, 6 digits, dash → "YYYYMMDD-HHMMSS-".
+	if len(stem) < 16 || stem[8] != '-' || stem[15] != '-' {
+		return "", stem
+	}
+	return stem[:15], stem[16:]
 }
 
 // HeadSHA returns the current git HEAD SHA for the store, or "" when git is

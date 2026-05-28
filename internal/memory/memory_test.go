@@ -380,6 +380,56 @@ func TestRenderInjection_HidesMarker(t *testing.T) {
 	}
 }
 
+func TestSaveRolloutSummary_WritesAndLists(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if err := s.SaveRolloutSummary("tune-extract", "# tuned the extract prompt\n\ndetails…"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListRolloutSummaries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 rollout summary, got %d", len(got))
+	}
+	if got[0].Slug != "tune-extract" {
+		t.Errorf("slug = %q, want %q", got[0].Slug, "tune-extract")
+	}
+	if !strings.Contains(got[0].Body, "tuned the extract prompt") {
+		t.Errorf("body lost: %q", got[0].Body)
+	}
+	// Filename should have the timestamp prefix so on-disk ordering is chronological.
+	if !strings.HasSuffix(got[0].Filename, "-tune-extract.md") {
+		t.Errorf("filename = %q, expected to end with -tune-extract.md", got[0].Filename)
+	}
+}
+
+func TestSaveRolloutSummary_NoOpOnEmpty(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+	if err := s.SaveRolloutSummary("", "body"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRolloutSummary("slug", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.ListRolloutSummaries()
+	if len(got) != 0 {
+		t.Errorf("empty slug or body should be a no-op, got %+v", got)
+	}
+}
+
+func TestSaveRolloutSummary_CommitsWhenGitEnabled(t *testing.T) {
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
+	if err := s.SaveRolloutSummary("first-rollout", "body"); err != nil {
+		t.Fatal(err)
+	}
+	sha, _ := s.HeadSHA()
+	if sha == "" {
+		t.Errorf("HeadSHA should be non-empty after a rollout-summary commit")
+	}
+}
+
 func TestExportNotes(t *testing.T) {
 	s := NewStoreAt(t.TempDir())
 	if notes, _ := s.ExportNotes(); notes != "" {

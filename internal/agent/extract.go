@@ -7,24 +7,34 @@ import (
 	"strings"
 )
 
-// extractMaxTokens caps the memory-extraction side-call. Like the compaction
-// summary, an extraction is a short structured carry-forward, not a transcript.
-const extractMaxTokens = 1024
+// extractMaxTokens caps the memory-extraction side-call. The cap covers all
+// three artifacts the side-call produces in one shot (slug + summary + facts),
+// so it's larger than a fact-only extraction would need.
+const extractMaxTokens = 4096
 
 // extractSystem instructs the extraction side-call to mine a finished
-// conversation for durable, cross-session facts and emit them as JSON. It is
-// the boundary counterpart to the immediate `remember` tool: remember catches
-// explicit signals mid-session, this sweeps for what the model didn't record.
+// conversation for three artifacts:
+//
+//   - facts: typed durable memories (the entries injected into future prompts)
+//   - rollout_summary: a narrative reference of what this session was about
+//   - rollout_slug: a filesystem-safe handle naming this session
+//
+// It's the boundary counterpart to the immediate `remember` tool: remember
+// catches explicit signals mid-session, this sweeps for what the model didn't
+// record AND produces the per-rollout reference doc Codex calls
+// `rollout_summaries/<…>.md`.
 //
 // The prompt borrows the shape of Codex's stage_one writer: an explicit no-op
 // gate, a reading-priority rule (user > tool > assistant), outcome triage,
-// and evidence→implication wording for feedback. The goal is to suppress the
-// low-quality "summarize what just happened" output the original 20-line
-// prompt produced, and to keep each fact actionable in a future session.
+// and evidence→implication wording for feedback.
 const extractSystem = `You extract durable, cross-session memories from a coding agent's finished
-conversation. Output ONLY a JSON array; each element:
+conversation. Output ONE JSON object with three top-level fields:
 
-  {"type": "user|feedback|project|reference", "description": "<one line>", "content": "<the fact>"}
+  {
+    "rollout_slug":    "<short kebab-case handle for this session, <= 60 chars>",
+    "rollout_summary": "<narrative reference doc, see format below>",
+    "facts":           [ { "type": "user|feedback|project|reference", "description": "<one line>", "content": "<the fact>" }, ... ]
+  }
 
 ================ GOAL ================
 Help future sessions:
@@ -37,8 +47,15 @@ fewer re-specifications), not just future agent time saved.
 
 ================ NO-OP GATE ================
 Before each candidate fact, ask: "Will a future session plausibly do better
-because of THIS line?" If no, drop it. If nothing qualifies overall, output
-exactly []. Most turns yield nothing. Quality beats quantity.
+because of THIS line?" If no, drop it.
+
+If the whole session has nothing worth carrying — random one-off questions,
+quick fixes already in the code, brainstorming with no adopted conclusion —
+return the all-empty form exactly:
+
+  {"rollout_slug": "", "rollout_summary": "", "facts": []}
+
+Most turns yield nothing. Quality beats quantity. Empty is correct, not lazy.
 
 ================ READING PRIORITY ================
 Read the conversation in this order of trust:
@@ -97,14 +114,56 @@ For uncertain → usually skip; wait for stronger signal in a future session.
 - Pure brainstorming / options the user discussed but did not commit to.
 - Secrets, tokens, API keys, credentials. Redact if quoting.
 
-================ STYLE ================
+================ FACTS STYLE ================
 - One fact per array element. Do not merge distinct defaults.
 - Terse, concrete, actionable. Preserve short user quotes when they sharpen the rule.
 - description: one line, <=80 chars, the rule itself (not a topic label).
 - content: the rule, then for feedback/project a "Why: ..." clause, then for
   feedback an optional "How to apply: ..." clause naming when this kicks in.
 
-Output: JSON array only. No prose around it. No code fences.`
+================ rollout_slug ================
+A filesystem-safe, lowercase, hyphen-separated handle naming THIS session.
+Examples: "tune-extract-prompt", "fix-bing-search-encoding", "design-m11".
+Cap at 60 chars. Avoid generic slugs ("debug", "fix", "task") — be specific
+enough that a future search lands on the right session. If you can't pick a
+specific name, use "".
+
+================ rollout_summary ================
+A narrative reference doc future sessions can grep when they ask "did we do
+anything in this area before?". It is NOT auto-injected into the next session
+(the consolidated memory_summary is) — these summaries live on disk for
+on-demand reading, so they can be detailed.
+
+Length: as much as the session deserves. Single-task sessions: ~30-80 lines.
+Multi-task sessions: longer, one section per task. Use Markdown.
+
+Suggested structure (omit sections that are empty):
+
+  # <one-sentence summary of the session>
+
+  Rollout context: <what the user wanted, environment, constraints>
+
+  ## Task <n>: <task name>
+
+  Outcome: <success|partial|fail|uncertain>
+
+  Preference signals:
+  - when <situation>, the user said "<short quote>" → implies <default for next time>
+
+  Key steps: <only steps that produced a durable result>
+
+  Failures and how to do differently: <what failed, what worked instead, why>
+
+  Reusable knowledge: <validated repo facts, high-leverage shortcuts>
+
+  References: <file paths, commands, error strings worth preserving verbatim>
+
+For fail / partial / uncertain outcomes: emphasize what didn't work, the pivot
+that did, and the prevention rule.
+
+================ OUTPUT ================
+ONE JSON object only. No prose, no code fences. Honor the no-op gate — the
+all-empty form is correct when there's nothing durable to carry.`
 
 // consolidateSystem instructs the consolidation side-call to maintain (rather
 // than rebuild) a summary: it gets the current summary plus any new notes since
@@ -126,28 +185,42 @@ type MemoryFact struct {
 	Content     string `json:"content"`
 }
 
+// ExtractResult is the three-piece artifact a session-end extraction produces:
+// a typed-facts array (the durable memory entries), a narrative rollout
+// summary (the on-disk reference doc), and a slug (the filename handle).
+//
+// Any field can be empty. An all-empty result means the no-op gate fired and
+// the session had nothing worth carrying forward.
+type ExtractResult struct {
+	Slug    string       `json:"rollout_slug"`
+	Summary string       `json:"rollout_summary"`
+	Facts   []MemoryFact `json:"facts"`
+}
+
 // ExtractMemory runs the extraction side-call over msgs (a finished session's
-// messages) and returns the durable facts found. It does not write anything —
-// the caller persists the facts. A nil slice means "nothing worth keeping".
-func (a *Agent) ExtractMemory(ctx context.Context, msgs []Message) ([]MemoryFact, error) {
+// messages) and returns the three-piece result. It does not write anything —
+// the caller persists each piece (entries via the memory Store, the rollout
+// summary via Store.SaveRolloutSummary). A zero ExtractResult means "nothing
+// worth keeping".
+func (a *Agent) ExtractMemory(ctx context.Context, msgs []Message) (ExtractResult, error) {
 	if a.Sender == nil {
-		return nil, fmt.Errorf("agent: no Sender configured")
+		return ExtractResult{}, fmt.Errorf("agent: no Sender configured")
 	}
 	if len(msgs) == 0 {
-		return nil, nil
+		return ExtractResult{}, nil
 	}
 	req := make([]Message, 0, len(msgs)+1)
 	req = append(req, msgs...)
 	req = append(req, NewUserMessage(
-		"Extract durable memories from the conversation above per your instructions. Output only the JSON array."))
+		"Extract durable memories from the conversation above per your instructions. Output only the JSON object."))
 
 	reply, err := a.Sender.SendMessages(ctx, a.Model, extractSystem, req, extractMaxTokens)
 	if err != nil {
-		return nil, err
+		return ExtractResult{}, err
 	}
 	a.sessionInputTokens += reply.InputTokens
 	a.sessionOutputTokens += reply.OutputTokens
-	return parseFacts(reply.Content)
+	return parseExtractResult(reply.Content)
 }
 
 // ConsolidateMemory runs the (incremental) consolidation side-call: it folds
@@ -187,22 +260,79 @@ func (a *Agent) ConsolidateMemory(ctx context.Context, priorSummary, newNotes st
 	return strings.TrimSpace(reply.Content), nil
 }
 
-// parseFacts extracts the JSON array from a side-call reply (tolerating a code
-// fence or surrounding prose) and normalizes each fact. A reply with no array
-// yields nil, nil — "nothing to record" is not an error.
-func parseFacts(s string) ([]MemoryFact, error) {
+// parseExtractResult parses the side-call reply into an ExtractResult,
+// tolerating a code fence or surrounding prose. The model is supposed to emit
+// a single JSON object with rollout_slug / rollout_summary / facts; for safety
+// we also accept a bare array (old shape from before this PR) and treat it as
+// a facts-only result with empty slug/summary. An empty / unparseable reply
+// yields a zero ExtractResult with no error — "nothing to record" is normal.
+func parseExtractResult(s string) (ExtractResult, error) {
 	s = strings.TrimSpace(stripCodeFence(s))
-	i := strings.Index(s, "[")
-	j := strings.LastIndex(s, "]")
+	if s == "" {
+		return ExtractResult{}, nil
+	}
+
+	// Decide which top-level shape we're looking at by the first significant
+	// JSON character. An object inside an array (legacy array shape) must NOT
+	// be confused with the new top-level object — we'd lose the facts.
+	first, _ := firstJSONChar(s)
+
+	if first == '{' {
+		if obj := sliceBetween(s, '{', '}'); obj != "" {
+			var r ExtractResult
+			if err := json.Unmarshal([]byte(obj), &r); err == nil {
+				r.Slug = sanitizeSlug(r.Slug)
+				r.Summary = strings.TrimSpace(r.Summary)
+				r.Facts = normalizeFacts(r.Facts)
+				return r, nil
+			}
+		}
+	}
+
+	if first == '[' {
+		if arr := sliceBetween(s, '[', ']'); arr != "" {
+			var facts []MemoryFact
+			if err := json.Unmarshal([]byte(arr), &facts); err == nil {
+				return ExtractResult{Facts: normalizeFacts(facts)}, nil
+			}
+		}
+	}
+
+	return ExtractResult{}, nil
+}
+
+// firstJSONChar returns the first '{' or '[' byte in s, scanning past
+// surrounding prose. Used to choose between object/array parse paths so an
+// array of objects isn't misread as a bare object.
+func firstJSONChar(s string) (byte, bool) {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			return s[i], true
+		}
+	}
+	return 0, false
+}
+
+// sliceBetween returns the substring from the first open rune to the last
+// close rune (inclusive), or "" if either is missing. Used to forgive a model
+// that wraps the JSON in surrounding prose.
+func sliceBetween(s string, open, close byte) string {
+	i := strings.IndexByte(s, open)
+	j := strings.LastIndexByte(s, close)
 	if i < 0 || j < 0 || j < i {
-		return nil, nil
+		return ""
 	}
-	var facts []MemoryFact
-	if err := json.Unmarshal([]byte(s[i:j+1]), &facts); err != nil {
-		return nil, fmt.Errorf("agent: parse memory facts: %w", err)
+	return s[i : j+1]
+}
+
+// normalizeFacts trims whitespace, fills missing description from content's
+// first line (and vice versa), and drops entries that are empty after that.
+func normalizeFacts(in []MemoryFact) []MemoryFact {
+	if len(in) == 0 {
+		return nil
 	}
-	out := make([]MemoryFact, 0, len(facts))
-	for _, f := range facts {
+	out := make([]MemoryFact, 0, len(in))
+	for _, f := range in {
 		f.Content = strings.TrimSpace(f.Content)
 		f.Description = strings.TrimSpace(f.Description)
 		if f.Content == "" && f.Description == "" {
@@ -217,9 +347,38 @@ func parseFacts(s string) ([]MemoryFact, error) {
 		out = append(out, f)
 	}
 	if len(out) == 0 {
-		return nil, nil
+		return nil
 	}
-	return out, nil
+	return out
+}
+
+// sanitizeSlug folds an LLM-supplied slug to the same kebab-case shape we use
+// elsewhere and caps the length. Empty → empty (the caller falls back to the
+// session id or a default).
+func sanitizeSlug(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 60 {
+		out = strings.Trim(out[:60], "-")
+	}
+	return out
 }
 
 // stripCodeFence removes a leading ```… fence and trailing ``` if present, so a

@@ -46,10 +46,10 @@ func extractPreviousSession(ctx context.Context, a *agent.Agent, store *memory.S
 		if sess.ID == st.LastExtractedSession || sess.TurnCount() == 0 {
 			return // reached the already-extracted boundary (or nothing to do)
 		}
-		facts, err := a.ExtractMemory(ctx, sess.ToHistory().Snapshot())
+		res, err := a.ExtractMemory(ctx, sess.ToHistory().Snapshot())
 		if err == nil {
 			n := 0
-			for _, f := range facts {
+			for _, f := range res.Facts {
 				if serr := store.Save(memory.Entry{
 					Description: f.Description,
 					Type:        memory.Type(f.Type),
@@ -58,8 +58,22 @@ func extractPreviousSession(ctx context.Context, a *agent.Agent, store *memory.S
 					n++
 				}
 			}
-			if n > 0 {
-				fmt.Fprintf(out, "  ⓘ remembered %d fact(s) from your last session\n", n)
+			// Persist the per-rollout narrative reference. Fall back to the
+			// session id as the slug when the model returned "" (no-op
+			// extractions return empty here and SaveRolloutSummary skips them
+			// anyway).
+			slug := res.Slug
+			if slug == "" {
+				slug = sess.ID
+			}
+			_ = store.SaveRolloutSummary(slug, res.Summary)
+
+			if n > 0 || res.Summary != "" {
+				suffix := ""
+				if res.Summary != "" {
+					suffix = " (+ rollout summary)"
+				}
+				fmt.Fprintf(out, "  ⓘ remembered %d fact(s) from your last session%s\n", n, suffix)
 			}
 		}
 		st.LastExtractedSession = sess.ID
