@@ -42,14 +42,24 @@ type Connection struct {
 // hung server can't stall startup. Servers are connected sequentially to
 // keep startup logs readable; the connect cost is dominated by subprocess
 // spawn and a single round-trip, so v1 doesn't need parallelism.
-func ConnectAll(ctx context.Context, cfg *Config, info Implementation, warn io.Writer) *Registry {
+//
+// authPromptFor produces the OAuthPrompt for one server. The factory
+// shape (rather than a single shared prompt) lets the CLI label each
+// device-flow card with the server name it's authorising. May be nil
+// when no entry uses OAuth — a nil factory triggers the same "auth
+// required but not wired" error as a missing config.
+func ConnectAll(ctx context.Context, cfg *Config, info Implementation, authPromptFor func(serverName string) OAuthPrompt, warn io.Writer) *Registry {
 	r := &Registry{conns: map[string]*Connection{}}
 	if cfg == nil {
 		return r
 	}
 	for _, name := range cfg.ServerNames() {
 		entry := cfg.Servers[name]
-		conn, err := connectOne(ctx, name, entry, info)
+		var prompt OAuthPrompt
+		if entry.Auth == "oauth" && authPromptFor != nil {
+			prompt = authPromptFor(name)
+		}
+		conn, err := connectOne(ctx, name, entry, info, prompt)
 		if err != nil {
 			if warn != nil {
 				fmt.Fprintf(warn, "mcp: server %q skipped: %v\n", name, err)
@@ -61,10 +71,15 @@ func ConnectAll(ctx context.Context, cfg *Config, info Implementation, warn io.W
 	return r
 }
 
-func connectOne(ctx context.Context, name string, entry ServerEntry, info Implementation) (*Connection, error) {
-	// 10s is generous for subprocess spawn + handshake but bounded enough
-	// that a misconfigured server doesn't keep a fresh chat blocked.
-	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+func connectOne(ctx context.Context, name string, entry ServerEntry, info Implementation, authPrompt OAuthPrompt) (*Connection, error) {
+	// Per-server timeout. OAuth-protected servers get a longer window
+	// because the user has to do the device-flow dance interactively;
+	// stdio + static-auth servers should still snap up in ~10s.
+	timeout := 10 * time.Second
+	if entry.Auth == "oauth" {
+		timeout = 5 * time.Minute
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	var transport Transport
@@ -80,10 +95,15 @@ func connectOne(ctx context.Context, name string, entry ServerEntry, info Implem
 		}
 		transport = t
 	case "http":
-		t, err := NewHTTPTransport(HTTPConfig{
-			URL:     entry.URL,
-			Headers: entry.Headers,
-		})
+		cfg := HTTPConfig{URL: entry.URL, Headers: entry.Headers}
+		if entry.Auth == "oauth" {
+			oc, err := NewOAuthClient(entry.URL, name, info.Name, authPrompt)
+			if err != nil {
+				return nil, fmt.Errorf("oauth init: %w", err)
+			}
+			cfg.OAuth = oc
+		}
+		t, err := NewHTTPTransport(cfg)
 		if err != nil {
 			return nil, err
 		}

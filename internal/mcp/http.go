@@ -39,6 +39,7 @@ type HTTPTransport struct {
 	url     string
 	headers map[string]string
 	hc      *http.Client
+	oauth   OAuthProvider // nil = no OAuth; static headers only
 
 	// Session id is empty until the first server response sets it via
 	// Mcp-Session-Id. Subsequent requests echo it back.
@@ -59,6 +60,10 @@ type HTTPTransport struct {
 type HTTPConfig struct {
 	URL     string
 	Headers map[string]string
+	// OAuth, when non-nil, drives bearer-token injection + 401 retry.
+	// The transport calls OAuth.Token before each request and
+	// OAuth.Invalidate on a 401 response, then retries once.
+	OAuth OAuthProvider
 }
 
 // NewHTTPTransport builds an HTTPTransport ready to Send / Receive.
@@ -70,6 +75,7 @@ func NewHTTPTransport(cfg HTTPConfig) (*HTTPTransport, error) {
 	return &HTTPTransport{
 		url:     cfg.URL,
 		headers: cfg.Headers,
+		oauth:   cfg.OAuth,
 		hc:      &http.Client{},
 		// 16 is generous — the synchronous Send/Receive pattern only ever
 		// has one outstanding response, but headroom protects against any
@@ -81,6 +87,10 @@ func NewHTTPTransport(cfg HTTPConfig) (*HTTPTransport, error) {
 // Send POSTs msg to the configured URL and queues the response for the
 // next Receive call. Honors the documented Send-then-Receive pairing — one
 // Send does exactly one HTTP round-trip and yields exactly one frame.
+//
+// When an OAuth provider is configured: every request injects the cached
+// access token; a 401 response invalidates the cache and triggers exactly
+// one retry (so the user doesn't see two device-flow prompts in a row).
 func (t *HTTPTransport) Send(ctx context.Context, msg *Message) error {
 	if t.closed.Load() {
 		return errors.New("mcp: http transport: closed")
@@ -89,9 +99,32 @@ func (t *HTTPTransport) Send(ctx context.Context, msg *Message) error {
 	if err != nil {
 		return fmt.Errorf("mcp: marshal: %w", err)
 	}
+
+	// At most one retry on 401 — the retry uses a freshly-acquired token.
+	for attempt := 0; attempt < 2; attempt++ {
+		retry, err := t.doRequest(ctx, body, attempt > 0)
+		if !retry {
+			return err
+		}
+		// retry==true means 401 was observed; loop to retry once.
+	}
+	return errors.New("mcp: http: still unauthorized after retry")
+}
+
+// doRequest performs one HTTP round-trip. Returns (retry, err):
+//
+//   - retry=true means "401 observed, OAuth was invalidated, caller should
+//     loop one more time with a freshly-acquired token". err is non-nil
+//     here but only as breadcrumb context.
+//   - retry=false means "this attempt is terminal — either the response
+//     was queued for Receive or err describes a hard failure".
+//
+// forceFreshToken=true on the retry attempt forces a token refresh path
+// even if the cached token still looks unexpired.
+func (t *HTTPTransport) doRequest(ctx context.Context, body []byte, forceFreshToken bool) (retry bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("mcp: request: %w", err)
+		return false, fmt.Errorf("mcp: request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// MCP spec: clients MUST include Accept with both JSON and SSE so the
@@ -107,9 +140,23 @@ func (t *HTTPTransport) Send(ctx context.Context, msg *Message) error {
 	}
 	t.sessionMu.Unlock()
 
+	// Bearer-token injection from OAuth provider, if configured.
+	if t.oauth != nil {
+		if forceFreshToken {
+			t.oauth.Invalidate()
+		}
+		tok, terr := t.oauth.Token(ctx)
+		if terr != nil {
+			return false, fmt.Errorf("mcp: oauth token: %w", terr)
+		}
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
+
 	resp, err := t.hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("mcp: do: %w", err)
+		return false, fmt.Errorf("mcp: do: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -124,11 +171,21 @@ func (t *HTTPTransport) Send(ctx context.Context, msg *Message) error {
 	if resp.StatusCode == http.StatusNoContent {
 		// 204: server accepted a notification. No body to parse, no inbox
 		// queue — the client doesn't expect a response for notifications.
-		return nil
+		return false, nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		// If we have OAuth and this isn't already our second attempt, ask
+		// the caller to retry with a fresh token. The provider's
+		// Invalidate is what makes the next Token() do real work.
+		if t.oauth != nil && !forceFreshToken {
+			return true, errors.New("mcp: http 401, will retry")
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return false, fmt.Errorf("mcp: http 401: %s", bytes.TrimSpace(b))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("mcp: http %d: %s", resp.StatusCode, bytes.TrimSpace(b))
+		return false, fmt.Errorf("mcp: http %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 
 	// We only handle plain-JSON responses for v1. If the server insists on
@@ -136,19 +193,19 @@ func (t *HTTPTransport) Send(ctx context.Context, msg *Message) error {
 	// hanging — the user can pick a different server or file an issue.
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !isJSONContentType(ct) {
-		return fmt.Errorf("mcp: http: unsupported response Content-Type %q (v1 needs application/json)", ct)
+		return false, fmt.Errorf("mcp: http: unsupported response Content-Type %q (v1 needs application/json)", ct)
 	}
 
 	var m Message
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		return fmt.Errorf("mcp: decode response: %w", err)
+		return false, fmt.Errorf("mcp: decode response: %w", err)
 	}
 	select {
 	case t.inbox <- &m:
 	case <-ctx.Done():
-		return ctx.Err()
+		return false, ctx.Err()
 	}
-	return nil
+	return false, nil
 }
 
 // Receive blocks for the next queued response. The pairing with Send is

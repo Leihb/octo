@@ -269,6 +269,9 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 					context.Background(),
 					mcpCfg,
 					mcp.Implementation{Name: "octo", Version: version.Version},
+					func(serverName string) mcp.OAuthPrompt {
+						return newCLIOAuthPrompt(stdout, serverName)
+					},
 					stderr,
 				)
 				if mcpReg.Len() > 0 {

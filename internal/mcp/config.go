@@ -43,6 +43,17 @@ type ServerEntry struct {
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 
+	// Auth strategy. HTTP-only field; ignored for stdio servers.
+	//
+	//	""        — no auth beyond what's in Headers (default)
+	//	"oauth"   — run the spec-compliant device-flow OAuth on first
+	//	            connect and on every 401 response; cached at
+	//	            ~/.octo/mcp-tokens/<server>.json
+	//
+	// Future values may add bearer or client_credentials; the strict
+	// string match in Validate keeps typos visible.
+	Auth string `json:"auth,omitempty"`
+
 	// Optional: disable a server without removing it from config.
 	Disabled bool `json:"disabled,omitempty"`
 }
@@ -68,6 +79,14 @@ func (e ServerEntry) Validate(name string) error {
 	}
 	if e.Command != "" && e.URL != "" {
 		return fmt.Errorf("mcp server %q: cannot set both 'command' and 'url'", name)
+	}
+	switch e.Auth {
+	case "", "oauth":
+	default:
+		return fmt.Errorf("mcp server %q: unknown auth %q (want \"oauth\" or omit)", name, e.Auth)
+	}
+	if e.Auth != "" && e.Command != "" {
+		return fmt.Errorf("mcp server %q: auth applies to http servers only", name)
 	}
 	return nil
 }

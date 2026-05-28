@@ -52,6 +52,10 @@ mcp.json format (mirrors Claude Code):
       "remote-api": {
         "url":     "https://example.com/mcp",
         "headers": {"Authorization": "Bearer abc..."}
+      },
+      "lark-project": {
+        "url":  "https://project.larksuite.com/mcp_server/v1",
+        "auth": "oauth"
       }
     }
   }
@@ -59,6 +63,15 @@ mcp.json format (mirrors Claude Code):
 A server entry must set EITHER `+"`"+`command`+"`"+` (stdio transport — spawn a subprocess)
 OR `+"`"+`url`+"`"+` (Streamable HTTP transport). `+"`"+`disabled: true`+"`"+` skips an entry without
 removing it.
+
+Auth (HTTP only):
+  ""       — no auth beyond what's in headers (default)
+  "oauth"  — discover the server's auth-server metadata on first 401,
+             run RFC 8628 Device Authorization Grant (open a URL,
+             enter a code), cache the token at
+             ~/.octo/mcp-tokens/<server>.json. Refresh tokens are
+             used automatically; expired refresh tokens trigger a
+             fresh device-flow prompt.
 
 Tool naming in the agent's tool list:
   mcp__<server>__<tool>            one entry per advertised tool
