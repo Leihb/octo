@@ -24,10 +24,57 @@ func printCommandHelp(name string, w io.Writer) bool {
 		memorydHelp(w)
 	case "completion":
 		completionHelp(w)
+	case "mcp":
+		mcpHelp(w)
 	default:
 		return false
 	}
 	return true
+}
+
+func mcpHelp(w io.Writer) {
+	fmt.Fprintln(w, `octo mcp — Model Context Protocol client. With `+"`"+`--tools`+"`"+` on, every server
+listed in mcp.json gets connected at session start; its tools, resources, and
+prompts ride alongside octo's built-in tools.
+
+Configuration:
+  ~/.octo/mcp.json                 user-global config (always loaded)
+  ./.octo/mcp.json                 project-local config (overrides user-global per name)
+
+mcp.json format (mirrors Claude Code):
+  {
+    "mcpServers": {
+      "filesystem": {
+        "command": "npx",
+        "args":    ["-y", "@modelcontextprotocol/server-filesystem", "/some/path"],
+        "env":     {"FOO": "bar"}
+      },
+      "remote-api": {
+        "url":     "https://example.com/mcp",
+        "headers": {"Authorization": "Bearer abc..."}
+      }
+    }
+  }
+
+A server entry must set EITHER `+"`"+`command`+"`"+` (stdio transport — spawn a subprocess)
+OR `+"`"+`url`+"`"+` (Streamable HTTP transport). `+"`"+`disabled: true`+"`"+` skips an entry without
+removing it.
+
+Tool naming in the agent's tool list:
+  mcp__<server>__<tool>            one entry per advertised tool
+  mcp__<server>__resource_read     synthesized when server supports resources/*
+  mcp__<server>__prompt_get        synthesized when server supports prompts/*
+
+Examples:
+  octo chat --tools                # auto-connect every configured server
+  /mcp                             # REPL: list connected servers + surface counts
+
+Failure handling — a server that won't start, fails initialize, or times out
+during the handshake is logged on stderr and skipped. The session keeps going
+with the survivors. The connect timeout is 10s per server.
+
+What's not yet implemented (v1): server-initiated notifications, resource
+subscriptions, sampling (server → client LLM calls), roots.`)
 }
 
 func chatHelp(w io.Writer) {

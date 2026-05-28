@@ -91,7 +91,7 @@ func completionCandidates(words []string) []string {
 	case "help":
 		// `octo help <TAB>` → list of help targets.
 		if len(words) == 3 {
-			return []string{"chat", "task", "memory", "init", "memoryd"}
+			return []string{"chat", "task", "memory", "init", "memoryd", "completion", "mcp"}
 		}
 	case "completion":
 		if len(words) == 3 {

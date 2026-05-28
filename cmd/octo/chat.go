@@ -14,6 +14,7 @@ import (
 
 	"github.com/Leihb/octo-agent/internal/agent"
 	"github.com/Leihb/octo-agent/internal/hooks"
+	"github.com/Leihb/octo-agent/internal/mcp"
 	"github.com/Leihb/octo-agent/internal/memory"
 	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/prompt"
@@ -23,6 +24,7 @@ import (
 	"github.com/Leihb/octo-agent/internal/skills"
 	"github.com/Leihb/octo-agent/internal/tasks"
 	"github.com/Leihb/octo-agent/internal/tools"
+	"github.com/Leihb/octo-agent/internal/version"
 )
 
 // Provider names accepted by `--provider`.
@@ -251,6 +253,38 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// (cross-session persistence is M11 territory).
 		tools.SetTaskStore(tasks.New())
 		defer tools.SetTaskStore(nil)
+
+		// MCP servers: load config, connect, register so DefaultTools and
+		// DefaultRegistry pick them up. Best-effort — a misconfigured or
+		// missing server is logged on stderr and the session keeps going.
+		// Tool-disabled chat doesn't load MCP because the agent would never
+		// invoke the tools anyway and we'd be paying subprocess spawn cost
+		// for nothing.
+		if *enableTools {
+			mcpCfg, err := mcp.LoadConfig(cwd)
+			if err != nil {
+				fmt.Fprintf(stderr, "octo chat: mcp config: %v\n", err)
+			} else if len(mcpCfg.Servers) > 0 {
+				mcpReg := mcp.ConnectAll(
+					context.Background(),
+					mcpCfg,
+					mcp.Implementation{Name: "octo", Version: version.Version},
+					stderr,
+				)
+				if mcpReg.Len() > 0 {
+					tools.SetMCPRegistry(mcpReg)
+					defer func() {
+						tools.SetMCPRegistry(nil)
+						mcpReg.Close()
+					}()
+					if mcpReg.Len() == 1 {
+						fmt.Fprintf(stdout, "Connected 1 MCP server.\n")
+					} else {
+						fmt.Fprintf(stdout, "Connected %d MCP servers.\n", mcpReg.Len())
+					}
+				}
+			}
+		}
 	}
 
 	// Boundary memory (REPL only): extract durable facts from the previous

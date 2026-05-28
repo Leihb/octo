@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.4.0-dev]
 
-_Nothing yet — next milestone work (M8 web server, M9 IM bridge, or further roadmap items) will accumulate here._
+### Added
+- **MCP client** — `octo chat --tools` now auto-connects to every Model Context Protocol server listed in `~/.octo/mcp.json` (user-global) and `./.octo/mcp.json` (project-local, overrides per name); both stdio (subprocess) and Streamable HTTP transports are supported per MCP spec 2024-11-05. The new `internal/mcp` package is a self-contained client: JSON-RPC 2.0 framing, transport interface with stdio + HTTP implementations, lifecycle handshake, and typed wrappers for tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get. Each connected server's surface rides alongside octo's built-in tools as `mcp__<server>__<tool>` (matching Claude Code's naming convention so user tooling that grep's tool names keeps working); resources become a synthesized `mcp__<server>__resource_read(uri)` tool and prompts a `mcp__<server>__prompt_get(name, arguments)` tool, gated on the server's advertised capabilities. Config format mirrors Claude Code's `mcpServers` shape (`{command, args, env}` for stdio, `{url, headers}` for HTTP, plus `disabled: true`) so users can copy-paste configs between the two tools. Connect failures degrade — a misconfigured or slow server is logged on stderr and skipped (10s per-server timeout); the session keeps going with the survivors. New `/mcp` REPL slash command lists connected servers + their surface counts + the server-supplied instructions. `octo help mcp` documents the config format, transports, and the v1 omissions (notifications, subscriptions, sampling, roots).
 
 ## [0.3.0] — 2026-05-28
 

@@ -108,8 +108,9 @@ func TestCompletionCandidates_TaskIDsAfterVerbs(t *testing.T) {
 
 func TestCompletionCandidates_HelpTargets(t *testing.T) {
 	got := completionCandidates([]string{"octo", "help", ""})
-	if !sliceEq(got, []string{"chat", "task", "memory", "init", "memoryd"}) {
-		t.Errorf("help target completion = %v", got)
+	want := []string{"chat", "task", "memory", "init", "memoryd", "completion", "mcp"}
+	if !sliceEq(got, want) {
+		t.Errorf("help target completion = %v, want %v", got, want)
 	}
 }
 

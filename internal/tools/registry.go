@@ -59,6 +59,13 @@ func NewDefaultRegistry() DefaultRegistry {
 
 // Execute implements agent.ToolExecutor.
 func (r DefaultRegistry) Execute(ctx context.Context, name string, input map[string]any) (string, error) {
+	// MCP tools land here too — route them first so an "mcp__…" name
+	// never falls through to the unknown-tool path. executeMCP returns
+	// ok=false when the name isn't ours, then dispatch continues below.
+	if out, ok, err := executeMCP(ctx, name, input); ok {
+		return out, err
+	}
+
 	// Read-before-write pre-check (skipped when no tracker is configured).
 	if r.tracker != nil && (name == "write_file" || name == "edit_file") {
 		if path, ok := input["path"].(string); ok {
@@ -127,5 +134,9 @@ func DefaultTools() []agent.ToolDefinition {
 		}
 		defs = append(defs, t.Definition())
 	}
+	// MCP-advertised surfaces ride alongside built-ins, gated on a non-nil
+	// registry registered via SetMCPRegistry. Synthesised per-connection so
+	// each server's tools/resources/prompts surface together.
+	defs = append(defs, mcpToolDefs()...)
 	return defs
 }

@@ -77,6 +77,8 @@ func TestRun_HelpWithSubcommand_PrintsRichHelp(t *testing.T) {
 		{"memory", []string{"octo memory", "octo memory list"}},
 		{"init", []string{"octo init", ".octorules"}},
 		{"memoryd", []string{"octo memoryd", "PID file", "octo memoryd start"}},
+		{"mcp", []string{"octo mcp", "mcp.json", "mcp__"}},
+		{"completion", []string{"octo completion", "shell-completion"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.cmd, func(t *testing.T) {

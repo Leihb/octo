@@ -207,6 +207,9 @@ func runREPL(cfg replConfig) int {
 			case "/tasks":
 				printTasks(cfg.stdout)
 				continue
+			case "/mcp":
+				printMCP(cfg.stdout)
+				continue
 			default:
 				fmt.Fprintf(cfg.stdout, "Unknown command %q. Type /help for a list.\n", cmd)
 				continue
@@ -344,6 +347,7 @@ func printReplHelp(w io.Writer) {
 	fmt.Fprintln(w, "  /skills     List available skills (trigger one with /<name>)")
 	fmt.Fprintln(w, "  /memory     List what's remembered across sessions")
 	fmt.Fprintln(w, "  /tasks      Show the current session's task list")
+	fmt.Fprintln(w, "  /mcp        Show connected MCP servers and their surfaces")
 	fmt.Fprintln(w, "  /exit       Save and exit  (also: /quit, Ctrl-C, Ctrl-D)")
 }
 
@@ -396,6 +400,48 @@ func pluralEntries(n int) string {
 	return "ies"
 }
 
+// printMCP lists the connected MCP servers and the surface they advertised
+// (tool count + resource count + prompt count, plus the server-supplied
+// instructions if non-empty). Drives the /mcp REPL command.
+func printMCP(w io.Writer) {
+	reg := tools.ActiveMCPRegistry()
+	if reg == nil || reg.Len() == 0 {
+		fmt.Fprintln(w, "No MCP servers connected.")
+		fmt.Fprintln(w, "Configure one at ~/.octo/mcp.json (run `octo help mcp` for the format).")
+		return
+	}
+	conns := reg.Connections()
+	if len(conns) == 1 {
+		fmt.Fprintln(w, "1 MCP server connected:")
+	} else {
+		fmt.Fprintf(w, "%d MCP servers connected:\n", len(conns))
+	}
+	for _, c := range conns {
+		info := c.Client.ServerInfo()
+		nameVer := info.Name
+		if info.Version != "" {
+			nameVer = fmt.Sprintf("%s %s", info.Name, info.Version)
+		}
+		fmt.Fprintf(w, "  %s (%s): %d tool%s, %d resource%s, %d prompt%s\n",
+			c.Name, nameVer,
+			len(c.Tools), pluralS(len(c.Tools)),
+			len(c.Resources), pluralS(len(c.Resources)),
+			len(c.Prompts), pluralS(len(c.Prompts)))
+		if instr := c.Client.Instructions(); instr != "" {
+			for _, line := range strings.Split(instr, "\n") {
+				fmt.Fprintf(w, "      %s\n", line)
+			}
+		}
+	}
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // printTasks shows the session-scoped task list, reusing the same formatter
 // the task_list tool returns to the model. Distinct from the LLM-facing
 // rendering only in that this runs at the user's command and goes to stdout
@@ -414,6 +460,7 @@ func printTasks(w io.Writer) {
 var reservedReplCommands = map[string]bool{
 	"init": true, "exit": true, "quit": true, "help": true,
 	"cost": true, "save": true, "sessions": true, "skills": true,
+	"memory": true, "tasks": true, "mcp": true,
 }
 
 // skillTrigger reports whether line is a /<name> invocation of a discovered
