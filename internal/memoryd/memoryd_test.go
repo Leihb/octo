@@ -93,6 +93,9 @@ func TestRemovePIDFile_IdempotentOnMissing(t *testing.T) {
 // ── IsRunning ────────────────────────────────────────────────────────────
 
 func TestIsRunning_CurrentProcess(t *testing.T) {
+	if !SupportedOnThisOS() {
+		t.Skip("PID probing isn't supported on this OS — IsRunning returns false structurally")
+	}
 	if !IsRunning(os.Getpid()) {
 		t.Error("our own PID should be reported as Running")
 	}
@@ -129,6 +132,9 @@ func TestCheckStatus_NoPIDFileNotAnError(t *testing.T) {
 }
 
 func TestCheckStatus_AlivePID(t *testing.T) {
+	if !SupportedOnThisOS() {
+		t.Skip("daemon model not supported on this OS")
+	}
 	fakeHome(t)
 	path, _ := PIDFile()
 	if err := WritePIDFile(path, os.Getpid()); err != nil {
@@ -185,6 +191,9 @@ func TestReserveStart_FreshHomeSucceeds(t *testing.T) {
 }
 
 func TestReserveStart_AlreadyRunningRefuses(t *testing.T) {
+	if !SupportedOnThisOS() {
+		t.Skip("daemon model not supported on this OS — IsRunning always returns false there, so 'already running' never triggers")
+	}
 	fakeHome(t)
 	path, _ := PIDFile()
 	if err := WritePIDFile(path, os.Getpid()); err != nil {

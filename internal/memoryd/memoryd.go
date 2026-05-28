@@ -30,7 +30,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -98,29 +97,25 @@ func RemovePIDFile(path string) error {
 }
 
 // IsRunning probes whether a process with the given PID exists. On Unix
-// this uses `kill -0` (signal 0 = just check, don't deliver). The PID
-// must be >0 (we already validated that in ReadPIDFile).
+// this uses `kill -0` (signal 0 = just check, don't deliver). On Windows
+// it always returns false — the daemon is unsupported there (see
+// SupportedOnThisOS), so the answer is structurally "no daemon", and
+// every code path that consults IsRunning gracefully degrades to the
+// Phase 1 fallback.
 //
-// False positives are possible if the OS recycled the PID to an unrelated
-// process — in that case `octo memoryd start` will detect the conflict
-// when it tries to write its own PID, and `octo memoryd stop` will
-// SIGTERM the unrelated process. Acceptable for v1; a real watchdog
+// False positives are possible on Unix if the OS recycled the PID to an
+// unrelated process — in that case `octo memoryd start` will detect the
+// conflict when it tries to write its own PID, and `octo memoryd stop`
+// will SIGTERM the unrelated process. Acceptable for v1; a real watchdog
 // would verify the binary by reading /proc/<pid>/comm.
+//
+// Implemented per-OS via isRunning so build-tagged behavior is local to
+// supported_*.go.
 func IsRunning(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// On Unix os.FindProcess never errors — the real check is Signal(0).
-	// On Windows os.FindProcess does check, but Signal isn't reliable, so
-	// daemon mode is unsupported there (see SupportedOnThisOS).
-	if err := proc.Signal(syscall.Signal(0)); err != nil {
-		return false
-	}
-	return true
+	return isRunning(pid)
 }
 
 // Status describes a daemon's lifecycle state for the CLI to render.

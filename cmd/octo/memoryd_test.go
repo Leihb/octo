@@ -80,6 +80,9 @@ func TestRunMemorydStatus_StalePIDFile(t *testing.T) {
 }
 
 func TestRunMemorydStatus_AliveDaemon(t *testing.T) {
+	if !memoryd.SupportedOnThisOS() {
+		t.Skip("daemon model not supported on this OS")
+	}
 	fakeHomeForMemoryd(t)
 	pidPath, _ := memoryd.PIDFile()
 	if err := memoryd.WritePIDFile(pidPath, os.Getpid()); err != nil {
