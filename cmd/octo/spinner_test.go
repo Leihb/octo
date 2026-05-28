@@ -62,3 +62,34 @@ func TestSpinner_NilReceiverIsSafe(t *testing.T) {
 	s.Start(time.Millisecond)
 	s.Stop()
 }
+
+// TestSpinner_StopWaitsForLoopExit pins down the regression fix for the
+// race that ate the first character of streamed assistant replies. Before
+// the fix, Stop() closed the stop channel and returned immediately —
+// leaving the goroutine to race against the next caller's Fprint. The
+// fix wires up a `done` channel and Stop() blocks on it.
+//
+// We can't directly observe the goroutine, but we can prove Stop is
+// synchronous by checking that after Stop returns the loop's state (the
+// `running` flag plus the `done` channel) is fully settled.
+func TestSpinner_StopWaitsForLoopExit(t *testing.T) {
+	var buf bytes.Buffer
+	s := newSpinner(&buf, "x")
+	// Force-enable even though buf isn't a tty so the goroutine actually
+	// runs. This is a white-box test.
+	s.enabled = true
+	s.Start(0)
+	s.Stop()
+	// done channel must be closed by the time Stop returns. select with a
+	// 0-length sleep proves we don't block (closed channels are
+	// immediately receivable).
+	select {
+	case <-s.done:
+	default:
+		t.Error("Stop returned before the loop goroutine signaled done")
+	}
+	// running flag must be false too — Stop CompareAndSwap flipped it.
+	if s.running.Load() {
+		t.Error("running flag should be false after Stop")
+	}
+}

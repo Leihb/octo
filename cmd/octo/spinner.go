@@ -37,6 +37,7 @@ type spinner struct {
 	// call Stop concurrently with the goroutine without locking.
 	running atomic.Bool
 	stop    chan struct{}
+	done    chan struct{} // closed by the loop goroutine on exit
 	once    sync.Once
 }
 
@@ -66,11 +67,21 @@ func (s *spinner) Start(delay time.Duration) {
 		return
 	}
 	s.stop = make(chan struct{})
+	s.done = make(chan struct{})
 	s.once = sync.Once{}
-	go s.loop(delay)
+	go func() {
+		defer close(s.done)
+		s.loop(delay)
+	}()
 }
 
-// Stop halts the spinner and clears the painted line. Idempotent.
+// Stop halts the spinner and clears the painted line. Synchronous —
+// blocks until the loop goroutine has actually exited (and cleared the
+// line) so the caller's next Fprint can't race the clear() write. The
+// previous async behaviour produced a visible bug: when the first text
+// delta arrived right after a spinner frame was painted, the order of
+// writes was (delta) (clear), which erased the first character or two of
+// the assistant's reply. Idempotent — only the first Stop waits.
 func (s *spinner) Stop() {
 	if s == nil || !s.enabled {
 		return
@@ -79,6 +90,7 @@ func (s *spinner) Stop() {
 		return
 	}
 	s.once.Do(func() { close(s.stop) })
+	<-s.done
 }
 
 func (s *spinner) loop(delay time.Duration) {
