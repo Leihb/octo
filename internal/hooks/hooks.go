@@ -162,6 +162,12 @@ func (r *Runner) run(ctx context.Context, cmd string, stdin []byte) ([]byte, err
 	var out, errBuf bytes.Buffer
 	c.Stdout = &out
 	c.Stderr = &errBuf
+	// WaitDelay (Go 1.20+) bounds how long Run blocks after the process is
+	// killed waiting for its stdio pipes to close. Without it, a `sh -c`
+	// whose child (e.g. `sleep`) keeps the pipes open survives the SIGKILL
+	// on the shell — Run hangs until the child terminates naturally. 1s
+	// is plenty for the kernel to tear down the process group.
+	c.WaitDelay = time.Second
 	if err := c.Run(); err != nil {
 		// Distinguish timeout from a script that just exit-1'd. Either
 		// way the caller will surface the message but the wording

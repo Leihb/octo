@@ -174,8 +174,10 @@ func TestPre_TimeoutKillsScript(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("slow script should time out, got %v", err)
 	}
-	if dur > 500*time.Millisecond {
-		t.Errorf("timeout took too long: %v (deadline was 100ms)", dur)
+	// timeout (100ms) + WaitDelay (1s for pipe-close fallback) → ~1.1s
+	// ceiling. Anything past that means kill/cleanup isn't working.
+	if dur > 2*time.Second {
+		t.Errorf("timeout took too long: %v (deadline was 100ms; WaitDelay adds ≤1s)", dur)
 	}
 }
 
