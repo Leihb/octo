@@ -172,8 +172,19 @@ func TestWriteSummary_PreferredByInjection(t *testing.T) {
 	}
 }
 
-func TestArchiveAll_MovesEntriesAndRebuildsIndex(t *testing.T) {
-	s := NewStoreAt(t.TempDir())
+// requireGit skips the test when `git` isn't on PATH. The git-baseline path
+// (auto-commit, ListArchived, HeadSHA, WorkspaceDiff) all degrade to no-ops
+// without git; tests for those paths can't meaningfully run without it.
+func requireGit(t *testing.T) {
+	t.Helper()
+	if !gitAvailable() {
+		t.Skip("git not on PATH — skipping git-baseline test")
+	}
+}
+
+func TestArchiveAll_DropsEntriesAndRebuildsIndex(t *testing.T) {
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
 	_ = s.Save(Entry{Description: "first", Type: TypeUser})
 	_ = s.Save(Entry{Description: "second", Type: TypeFeedback})
 
@@ -184,13 +195,13 @@ func TestArchiveAll_MovesEntriesAndRebuildsIndex(t *testing.T) {
 	if active, _ := s.List(); len(active) != 0 {
 		t.Errorf("after ArchiveAll, List should be empty: %+v", active)
 	}
-	// Archived list contains both.
+	// Archived list (recovered via git log) contains both.
 	archived, err := s.ListArchived()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(archived) != 2 {
-		t.Fatalf("expected 2 archived entries, got %d", len(archived))
+		t.Fatalf("expected 2 archived entries, got %d: %+v", len(archived), archived)
 	}
 	// Index was rebuilt (and now empty).
 	b, err := os.ReadFile(filepath.Join(s.dir, indexFile))
@@ -203,7 +214,8 @@ func TestArchiveAll_MovesEntriesAndRebuildsIndex(t *testing.T) {
 }
 
 func TestArchiveAll_PreservesArchivedContent(t *testing.T) {
-	s := NewStoreAt(t.TempDir())
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
 	_ = s.Save(Entry{Description: "a fact", Type: TypeProject, Body: "the body"})
 	_ = s.ArchiveAll()
 
@@ -213,8 +225,9 @@ func TestArchiveAll_PreservesArchivedContent(t *testing.T) {
 	}
 }
 
-func TestArchiveAll_OverwritesPriorArchive(t *testing.T) {
-	s := NewStoreAt(t.TempDir())
+func TestArchiveAll_KeepsLatestVersionAcrossRounds(t *testing.T) {
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
 	// First round: save and archive.
 	_ = s.Save(Entry{Name: "n", Description: "v1", Type: TypeUser})
 	_ = s.ArchiveAll()
@@ -226,6 +239,74 @@ func TestArchiveAll_OverwritesPriorArchive(t *testing.T) {
 	archived, _ := s.ListArchived()
 	if len(archived) != 1 || archived[0].Description != "v2" {
 		t.Errorf("archive should keep the latest version, got %+v", archived)
+	}
+}
+
+func TestSave_AutoCommitsWhenGitEnabled(t *testing.T) {
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
+	_ = s.Save(Entry{Description: "first fact", Type: TypeUser})
+
+	if !isGitRepo(s.dir) {
+		t.Fatalf("Save should lazily init a git repo when git is enabled")
+	}
+	sha, err := s.HeadSHA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha == "" {
+		t.Errorf("HeadSHA should be non-empty after a successful Save+commit")
+	}
+}
+
+func TestSave_NoGitWhenDisabled(t *testing.T) {
+	// Default NewStoreAt has git off — Save should not create .git/.
+	s := NewStoreAt(t.TempDir())
+	_ = s.Save(Entry{Description: "first fact", Type: TypeUser})
+	if isGitRepo(s.dir) {
+		t.Errorf("Save should NOT create .git/ when git is disabled")
+	}
+}
+
+func TestWorkspaceDiff_ReportsNewEntriesSinceBaseline(t *testing.T) {
+	requireGit(t)
+	s := NewStoreAt(t.TempDir()).EnableGit()
+	_ = s.Save(Entry{Description: "before baseline", Type: TypeUser})
+	base, _ := s.HeadSHA()
+	if base == "" {
+		t.Fatal("baseline SHA must be set after a save")
+	}
+
+	_ = s.Save(Entry{Description: "after baseline", Type: TypeFeedback})
+
+	diff, err := s.WorkspaceDiff(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The diff must record that after-baseline.md was added (a "new file mode"
+	// or "+++ b/after-baseline.md" line) but must NOT report before-baseline.md
+	// as newly added — it was already in the baseline.
+	if !strings.Contains(diff, "+++ b/after-baseline.md") {
+		t.Errorf("WorkspaceDiff should record the new file added since the baseline:\n%s", diff)
+	}
+	if strings.Contains(diff, "+++ b/before-baseline.md") {
+		t.Errorf("WorkspaceDiff should NOT record the baseline file as new:\n%s", diff)
+	}
+}
+
+func TestListArchived_EmptyWithoutGit(t *testing.T) {
+	// Without git enabled, ListArchived returns nil — the older archive/
+	// subdir no longer exists and there's no history to walk.
+	s := NewStoreAt(t.TempDir())
+	_ = s.Save(Entry{Description: "x", Type: TypeUser})
+	_ = s.ArchiveAll()
+
+	got, err := s.ListArchived()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("ListArchived without git should be nil, got %+v", got)
 	}
 }
 

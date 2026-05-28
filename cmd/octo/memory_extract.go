@@ -91,6 +91,12 @@ func consolidateIfDue(ctx context.Context, a *agent.Agent, store *memory.Store, 
 		return
 	}
 	st.LastConsolidated = time.Now().Format("2006-01-02")
+	// Record the new git baseline so the future sub-agent consolidator (#6)
+	// knows what point we've folded up to. HeadSHA returns "" when git is off,
+	// which is fine — it just leaves the field empty.
+	if sha, err := store.HeadSHA(); err == nil && sha != "" {
+		st.LastConsolidatedSHA = sha
+	}
 }
 
 func consolidateDue(st memory.State, store *memory.Store) bool {

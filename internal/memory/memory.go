@@ -51,11 +51,10 @@ type Entry struct {
 }
 
 const (
-	indexFile     = "MEMORY.md"
-	summaryFile   = "memory_summary.md"
-	stateFile     = ".state"
-	lockName      = ".lock"
-	archiveSubdir = "archive"
+	indexFile   = "MEMORY.md"
+	summaryFile = "memory_summary.md"
+	stateFile   = ".state"
+	lockName    = ".lock"
 
 	// summaryMarker is the first line of every memory_summary.md octo writes.
 	// It declares the on-disk protocol version so future readers can detect a
@@ -68,8 +67,15 @@ const (
 	summaryMarker = "<!-- octo-memory v1 -->"
 )
 
-// Store is a memory directory (default ~/.octo/memory).
-type Store struct{ dir string }
+// Store is a memory directory (default ~/.octo/memory). When gitEnabled, every
+// successful Save / WriteSummary / DropConsolidated call auto-commits inside
+// the directory so the entire memory history is rollback-safe and inspectable
+// via `git log`. Replaces the older `archive/` subdir approach: deleted
+// entries live in git history rather than a parallel folder.
+type Store struct {
+	dir        string
+	gitEnabled bool
+}
 
 // DefaultDir resolves ~/.octo/memory.
 func DefaultDir() (string, error) {
@@ -80,17 +86,49 @@ func DefaultDir() (string, error) {
 	return filepath.Join(home, ".octo", "memory"), nil
 }
 
-// NewStore returns a Store rooted at the default directory.
+// NewStore returns a Store rooted at the default directory with git baseline
+// enabled. Use NewStoreAt for tests / custom locations where you don't want
+// every operation to shell out to git.
 func NewStore() (*Store, error) {
 	dir, err := DefaultDir()
 	if err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir}, nil
+	return (&Store{dir: dir}).EnableGit(), nil
 }
 
 // NewStoreAt returns a Store rooted at dir (for tests / custom locations).
+// Git is NOT enabled by default here — chain .EnableGit() if you need it.
 func NewStoreAt(dir string) *Store { return &Store{dir: dir} }
+
+// EnableGit flips the auto-commit behavior on. Subsequent Save / WriteSummary
+// / DropConsolidated calls will lazily `git init` the dir (if needed) and
+// commit each change. Returns the receiver for fluent construction.
+func (s *Store) EnableGit() *Store {
+	s.gitEnabled = true
+	return s
+}
+
+// GitEnabled reports whether auto-commit is active.
+func (s *Store) GitEnabled() bool { return s.gitEnabled }
+
+// maybeCommit is the unified entry point for the auto-commit behavior: it
+// lazily initializes the repo on first use, then stages+commits with message.
+// Silently no-ops when git is disabled, git is not on PATH, or the working
+// tree is clean — none of those should fail a memory write.
+func (s *Store) maybeCommit(message string) {
+	if !s.gitEnabled || !gitAvailable() {
+		return
+	}
+	if !isGitRepo(s.dir) {
+		// Lazy init — first write triggers it. Swallow errors: a missing repo
+		// shouldn't break the memory write.
+		if err := gitInit(s.dir); err != nil {
+			return
+		}
+	}
+	_, _ = gitCommit(s.dir, message)
+}
 
 func today() string { return time.Now().Format("2006-01-02") }
 
@@ -135,7 +173,11 @@ func (s *Store) Save(e Entry) error {
 	if err := s.writeEntry(e); err != nil {
 		return err
 	}
-	return s.rebuildIndex()
+	if err := s.rebuildIndex(); err != nil {
+		return err
+	}
+	s.maybeCommit("remember: " + e.Name)
+	return nil
 }
 
 func (s *Store) writeEntry(e Entry) error {
@@ -334,9 +376,14 @@ func Slugify(s string) string {
 
 // State tracks what the boundary-extraction/consolidation triggers have already
 // done, so startup doesn't re-extract the same session or over-consolidate.
+//
+// LastConsolidatedSHA is the git baseline recorded after a successful
+// consolidation: the future sub-agent consolidator (#6) diffs against this to
+// see what's new. Empty until the first git-backed consolidation lands.
 type State struct {
 	LastExtractedSession string `json:"last_extracted_session"`
 	LastConsolidated     string `json:"last_consolidated"` // YYYY-MM-DD
+	LastConsolidatedSHA  string `json:"last_consolidated_sha,omitempty"`
 }
 
 // LoadState reads .state; a missing/unreadable file yields a zero State.
@@ -365,13 +412,50 @@ func (s *Store) SaveState(st State) error {
 // WriteSummary writes the consolidated memory summary (the injection source,
 // preferred by RenderInjection over the entry list). The file is prefixed with
 // summaryMarker so a future reader can detect the on-disk protocol version.
+// When git is enabled the write is auto-committed; the new commit's SHA is
+// what the caller should record as the consolidation baseline (HeadSHA).
 func (s *Store) WriteSummary(summary string) error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
 	body := summaryMarker + "\n" + strings.TrimSpace(summary) + "\n"
-	return os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(body), 0o644)
+	if err := os.WriteFile(filepath.Join(s.dir, summaryFile), []byte(body), 0o644); err != nil {
+		return err
+	}
+	s.maybeCommit("consolidate: write summary")
+	return nil
 }
+
+// HeadSHA returns the current git HEAD SHA for the store, or "" when git is
+// disabled, unavailable, or the repo has no commits yet. Useful as a baseline
+// for the future sub-agent consolidator (#6) to ask "what changed since this
+// commit?" via WorkspaceDiff.
+func (s *Store) HeadSHA() (string, error) {
+	if !s.gitEnabled || !gitAvailable() || !isGitRepo(s.dir) {
+		return "", nil
+	}
+	return gitHead(s.dir)
+}
+
+// WorkspaceDiff returns the unified diff between baseSHA and the current
+// working tree HEAD. baseSHA empty means "diff against the empty tree" — i.e.
+// every file currently committed. Used by the future sub-agent consolidator
+// to see what's new since the last consolidation. Returns "" if git is off.
+func (s *Store) WorkspaceDiff(baseSHA string) (string, error) {
+	if !s.gitEnabled || !gitAvailable() || !isGitRepo(s.dir) {
+		return "", nil
+	}
+	if baseSHA == "" {
+		// The empty-tree SHA is the same in every git repo; using it lets the
+		// caller treat "no baseline yet" the same as "diff since beginning".
+		baseSHA = emptyTreeSHA
+	}
+	return gitDiff(s.dir, baseSHA, "")
+}
+
+// emptyTreeSHA is git's hard-coded SHA for the empty tree object, which lets
+// us diff "from the beginning" without special-casing a missing baseline.
+const emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 // ReadSummary returns the current consolidated summary (with the protocol
 // marker stripped) or "" if none. Summaries written before the marker existed
@@ -398,10 +482,17 @@ func stripSummaryMarker(s string) string {
 	return strings.TrimSpace(rest)
 }
 
-// ArchiveAll moves every active entry to archive/, then rebuilds the index.
-// Use after a successful consolidation: the entries are preserved as
-// authoritative sources (in archive/) but no longer feed the consolidation or
-// the injection fallback, so neither grows unbounded.
+// ArchiveAll deletes every active entry from the working tree, rebuilds the
+// index, and commits the deletion ("consolidate: drop N entries"). Use after
+// a successful consolidation: the entries are preserved in git history as
+// authoritative sources, but no longer feed the next consolidation's input
+// or the injection fallback, so neither grows unbounded.
+//
+// Replaces the older `archive/` subdir approach. The name is kept so callers
+// (consolidateIfDue) don't have to change; the semantics are now "drop from
+// the working tree, keep in git". When git is disabled this still deletes the
+// files but loses the audit trail — callers should always EnableGit in
+// production.
 func (s *Store) ArchiveAll() error {
 	unlock, err := s.lock()
 	if err != nil {
@@ -415,61 +506,87 @@ func (s *Store) ArchiveAll() error {
 	if len(entries) == 0 {
 		return nil
 	}
-	archiveDir := filepath.Join(s.dir, archiveSubdir)
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-		return err
-	}
 	for _, e := range entries {
-		src := filepath.Join(s.dir, e.Name+".md")
-		dst := filepath.Join(archiveDir, e.Name+".md")
-		// If an archived file with the same name already exists, overwrite —
-		// the active version is more recent.
-		_ = os.Remove(dst)
-		if err := os.Rename(src, dst); err != nil {
+		if err := os.Remove(filepath.Join(s.dir, e.Name+".md")); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
-	return s.rebuildIndex()
+	if err := s.rebuildIndex(); err != nil {
+		return err
+	}
+	s.maybeCommit(fmt.Sprintf("consolidate: drop %d entries folded into summary", len(entries)))
+	return nil
 }
 
-// ListArchived returns all archived entries, sorted by name. Archived entries
-// remain queryable as authoritative sources but do not feed the consolidation
-// or injection paths.
+// ListArchived recovers entries that were folded into a past consolidation
+// (and thus removed from the working tree) by walking git history. Returns
+// nil,nil when git is unavailable or the dir isn't a repo — the older
+// `archive/` subdir is gone, and without git there's no archive to list.
+//
+// Strategy: enumerate every path that has ever appeared in the history, drop
+// the ones currently in the working tree (those are active, not archived),
+// and for each remaining path recover content from the most recent commit
+// that contained it. A slug deleted, re-added, then re-deleted recovers the
+// latest content. Dedup by entry Name.
 func (s *Store) ListArchived() ([]Entry, error) {
-	archiveDir := filepath.Join(s.dir, archiveSubdir)
-	ents, err := os.ReadDir(archiveDir)
+	if !s.gitEnabled || !gitAvailable() || !isGitRepo(s.dir) {
+		return nil, nil
+	}
+	paths, err := gitListAllPaths(s.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	var out []Entry
-	for _, de := range ents {
-		name := de.Name()
-		if de.IsDir() || !strings.HasSuffix(name, ".md") {
+	seen := map[string]Entry{}
+	for _, p := range paths {
+		// Only top-level <slug>.md files are entries.
+		if strings.Contains(p, "/") || !strings.HasSuffix(p, ".md") {
 			continue
 		}
-		e, ok, err := s.readArchived(name)
-		if err != nil {
-			return nil, err
+		if p == indexFile || p == summaryFile {
+			continue
 		}
-		if ok {
-			out = append(out, e)
+		// Skip files currently in the working tree.
+		if _, err := os.Stat(filepath.Join(s.dir, p)); err == nil {
+			continue
 		}
+		e, ok, err := s.recoverArchivedEntry(p)
+		if err != nil || !ok {
+			continue
+		}
+		seen[e.Name] = e
+	}
+	out := make([]Entry, 0, len(seen))
+	for _, e := range seen {
+		out = append(out, e)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
-func (s *Store) readArchived(file string) (Entry, bool, error) {
-	b, err := os.ReadFile(filepath.Join(s.dir, archiveSubdir, file))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Entry{}, false, nil
-		}
+// recoverArchivedEntry pulls the latest content of path from git: the commit
+// that most recently touched it is either the deletion itself (content lives
+// at parent) or an add/modify (content lives at that commit). Try the touching
+// commit first; on failure, try its parent.
+func (s *Store) recoverArchivedEntry(path string) (Entry, bool, error) {
+	sha, err := gitLastTouching(s.dir, path)
+	if err != nil || sha == "" {
 		return Entry{}, false, err
 	}
+	content, err := gitShow(s.dir, sha, path)
+	if err != nil {
+		// Latest touch deleted the file → recover from its parent.
+		content, err = gitShow(s.dir, sha+"^", path)
+		if err != nil {
+			return Entry{}, false, nil
+		}
+	}
+	return parseEntryFromBytes(path, []byte(content))
+}
+
+// parseEntryFromBytes parses an entry file's bytes into an Entry. Mirrors
+// readEntry's logic but works from a byte slice (used to materialize entries
+// recovered from git history). Malformed input yields ok=false with no error.
+func parseEntryFromBytes(file string, b []byte) (Entry, bool, error) {
 	front, body, ok := splitFrontmatter(string(b))
 	if !ok {
 		return Entry{}, false, nil
@@ -480,7 +597,7 @@ func (s *Store) readArchived(file string) (Entry, bool, error) {
 	}
 	name := fm.Name
 	if name == "" {
-		name = strings.TrimSuffix(file, ".md")
+		name = strings.TrimSuffix(filepath.Base(file), ".md")
 	}
 	t := Type(fm.Type)
 	if !validType(t) {
