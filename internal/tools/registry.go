@@ -32,6 +32,7 @@ var allTools = []tool{
 	SkillTool{},
 	RememberTool{},
 	LaunchAgentTool{},
+	AskUserQuestionTool{},
 }
 
 // DefaultRegistry is the agent.ToolExecutor used when `octo chat --tools` is
@@ -96,6 +97,7 @@ func DefaultTools() []agent.ToolDefinition {
 	skillsOn := skillsEnabled()
 	memoryOn := memoryEnabled()
 	spawnerOn := spawnerEnabled()
+	askerOn := askerEnabled()
 	defs := make([]agent.ToolDefinition, 0, len(allTools))
 	for _, t := range allTools {
 		if _, isSkill := t.(SkillTool); isSkill && !skillsOn {
@@ -105,6 +107,9 @@ func DefaultTools() []agent.ToolDefinition {
 			continue
 		}
 		if _, isLaunch := t.(LaunchAgentTool); isLaunch && !spawnerOn {
+			continue
+		}
+		if _, isAsk := t.(AskUserQuestionTool); isAsk && !askerOn {
 			continue
 		}
 		defs = append(defs, t.Definition())

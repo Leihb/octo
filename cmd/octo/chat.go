@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -205,10 +206,22 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// startup memory pass runs. This lets maybeProcessMemory's consolidation
 	// step use a sub-agent (M10, #6) with read-only filesystem tools, falling
 	// back to the side-call path when no Spawner is wired.
-	var toolExecutor tools.DefaultRegistry
+	//
+	// The stdin scanner is built here too so the same instance is shared with
+	// the REPL loop (no double-buffering), the permission gate, and the
+	// asker. Registering the asker NOW also matters for DefaultTools()
+	// gating: the ask_user_question tool only appears when an asker is
+	// registered, and DefaultTools is computed below before runREPL starts.
+	var (
+		toolExecutor tools.DefaultRegistry
+		replScanner  *bufio.Scanner
+	)
 	if isREPL {
 		toolExecutor = tools.NewDefaultRegistry()
 		tools.SetSpawner(newAgentSpawner(a, toolExecutor, tools.DefaultTools))
+		replScanner = bufio.NewScanner(stdin)
+		tools.SetAsker(newREPLAsker(replScanner, stdout))
+		defer tools.SetAsker(nil)
 	}
 
 	// Boundary memory (REPL only): extract durable facts from the previous
@@ -256,6 +269,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			stderr:   stderr,
 			skillReg: skillReg,
 			memStore: memStore,
+			scanner:  replScanner, // shared with the asker / permission gate
 		}
 		if *enableTools {
 			// Spawner is already registered above (before the memory pass) so

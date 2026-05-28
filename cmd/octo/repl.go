@@ -35,6 +35,11 @@ type replConfig struct {
 	executor   agent.ToolExecutor
 	skillReg   *skills.Registry // discovered skills; backs /skills and /<name>
 	memStore   *memory.Store    // cross-session memory; backs /memory (nil → disabled)
+	// scanner, when non-nil, is the stdin reader to use instead of building
+	// one fresh inside runREPL. Set by cmd/octo when the asker / spawner need
+	// the same scanner the loop will read from (no double-buffering). Tests
+	// that only pass cfg.stdin leave this nil and runREPL builds its own.
+	scanner *bufio.Scanner
 }
 
 // runREPL runs the interactive multi-turn loop until the user exits or EOF.
@@ -60,7 +65,10 @@ func runREPL(cfg replConfig) int {
 	fmt.Fprintln(cfg.stdout, `Type /help for commands, Ctrl-C or /exit to quit.`)
 	fmt.Fprintln(cfg.stdout)
 
-	scanner := bufio.NewScanner(cfg.stdin)
+	scanner := cfg.scanner
+	if scanner == nil {
+		scanner = bufio.NewScanner(cfg.stdin)
+	}
 
 	// Ctrl-C handling: while a turn is running, SIGINT cancels just that turn
 	// (the loop catches context.Canceled, finalizes well-formed history, and
