@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 0.5.0-dev]
 
-_Nothing yet — next milestone work (M8 web server, M9 IM bridge, MCP follow-ups like notifications / Auth Code+PKCE, or further roadmap items) will accumulate here._
+### Added
+- **Turn-boundary memory nudge** — appended to each user message (wrapped in a `<system-reminder>` block) when cross-session memory + tools are both on. The nudge reminds the model to scan the message it just received for the four signals base.md already documents (preference / correction with WHY / validated approach / external resource) and call `remember` if any matches. Without this, the in-session `remember` tool was being skipped almost universally — base.md's instructions are near the top of a long system prompt, far from the actual decision point, and the default action (do nothing) is free. Concrete case the nudge addresses: user pushes back with "不用，这个不算 bug，确实承诺只应该考虑 agent 给出的" (a domain rule worth saving as feedback), the agent acknowledges and moves on, the rule is forgotten next session. The nudge gates on `len(cfg.tools) > 0` because reminding the model to call a tool it doesn't have is pointless.
 
 ## [0.4.0] — 2026-05-28
 

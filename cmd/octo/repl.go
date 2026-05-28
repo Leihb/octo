@@ -230,12 +230,21 @@ func runREPL(cfg replConfig) int {
 		// are logged but never block the turn — the user still gets
 		// their reply.
 		turnInput := line
+		// Memory-hygiene nudge: appended to the user message when both
+		// cross-session memory and the `remember` tool are active, so
+		// the model is reminded to scan for durable signals at the
+		// precise decision point. Gated on tools being on because the
+		// nudge is asking the model to call a tool — pointless to ask
+		// when no tools are advertised.
+		if cfg.memStore != nil && len(cfg.tools) > 0 {
+			turnInput = appendMemoryNudge(turnInput)
+		}
 		if cfg.hooks.Configured() {
 			extra, herr := cfg.hooks.Pre(turnCtx, line)
 			if herr != nil {
 				fmt.Fprintf(cfg.stderr, "↳ pre-turn hook: %v\n", herr)
 			}
-			turnInput = hooks.InjectContext(line, extra)
+			turnInput = hooks.InjectContext(turnInput, extra)
 		}
 
 		var (

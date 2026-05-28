@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/memory"
 )
 
 // stubSender is a deterministic Sender for REPL tests — returns a fixed reply
@@ -478,4 +479,132 @@ func TestREPL_VerboseMode_PrintsModelAndHints(t *testing.T) {
 	if !strings.Contains(out, "model: test-model") {
 		t.Errorf("verbose mode should print model line; got:\n%s", out)
 	}
+}
+
+// capturingSender records the messages each Send call received, so tests
+// can inspect what was actually sent over the wire (e.g., whether the
+// memory-nudge reminder was appended to the user input).
+type capturingSender struct {
+	stubSender
+	lastMessages []agent.Message
+}
+
+func (c *capturingSender) SendMessages(ctx context.Context, sys, model string, msgs []agent.Message, maxTokens int) (agent.Reply, error) {
+	c.lastMessages = msgs
+	return c.stubSender.SendMessages(ctx, sys, model, msgs, maxTokens)
+}
+
+func (c *capturingSender) StreamMessages(ctx context.Context, sys, model string, msgs []agent.Message, maxTokens int, onChunk func(string)) (agent.Reply, error) {
+	c.lastMessages = msgs
+	return c.stubSender.StreamMessages(ctx, sys, model, msgs, maxTokens, onChunk)
+}
+
+// lastUserContent returns the textual Content of the last user message
+// sent — that's where the memory-nudge reminder lands when active.
+func (c *capturingSender) lastUserContent() string {
+	for i := len(c.lastMessages) - 1; i >= 0; i-- {
+		if c.lastMessages[i].Role == agent.RoleUser {
+			return c.lastMessages[i].Content
+		}
+	}
+	return ""
+}
+
+func TestREPL_MemoryNudge_AppendedWhenMemoryAndToolsActive(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	cap := &capturingSender{stubSender: stubSender{reply: "ok"}}
+	a := agent.New(cap, "test-model")
+
+	// Active memory store + a non-empty tools list = nudge should fire.
+	store := memory.NewStoreAt(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	cfg := replConfig{
+		a:        a,
+		session:  agent.NewSession("test-model", ""),
+		stdin:    strings.NewReader("hi\n/exit\n"),
+		stdout:   &stdout,
+		stderr:   &stderr,
+		memStore: store,
+		// A dummy tool def is enough to satisfy `len(cfg.tools) > 0`.
+		tools:    []agent.ToolDefinition{{Name: "dummy", Description: "x", Parameters: map[string]any{"type": "object"}}},
+		executor: dummyExecutor{},
+	}
+	if code := runREPL(cfg); code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", code, stderr.String())
+	}
+	got := cap.lastUserContent()
+	if !strings.Contains(got, "Memory hygiene check") {
+		t.Errorf("expected nudge in user message, got:\n%s", got)
+	}
+	if !strings.Contains(got, "hi") {
+		t.Errorf("user input lost from message body:\n%s", got)
+	}
+}
+
+func TestREPL_MemoryNudge_AbsentWhenMemoryDisabled(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	cap := &capturingSender{stubSender: stubSender{reply: "ok"}}
+	a := agent.New(cap, "test-model")
+
+	var stdout, stderr bytes.Buffer
+	cfg := replConfig{
+		a:        a,
+		session:  agent.NewSession("test-model", ""),
+		stdin:    strings.NewReader("hi\n/exit\n"),
+		stdout:   &stdout,
+		stderr:   &stderr,
+		memStore: nil, // ← memory off
+		tools:    []agent.ToolDefinition{{Name: "dummy", Description: "x", Parameters: map[string]any{"type": "object"}}},
+		executor: dummyExecutor{},
+	}
+	if code := runREPL(cfg); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if got := cap.lastUserContent(); strings.Contains(got, "Memory hygiene check") {
+		t.Errorf("nudge should be absent when memory is off; got:\n%s", got)
+	}
+}
+
+func TestREPL_MemoryNudge_AbsentWhenToolsOff(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
+
+	cap := &capturingSender{stubSender: stubSender{reply: "ok"}}
+	a := agent.New(cap, "test-model")
+
+	store := memory.NewStoreAt(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	cfg := replConfig{
+		a:        a,
+		session:  agent.NewSession("test-model", ""),
+		stdin:    strings.NewReader("hi\n/exit\n"),
+		stdout:   &stdout,
+		stderr:   &stderr,
+		memStore: store,
+		// tools empty: the remember tool can't be called, so the nudge
+		// is pointless and should be omitted.
+	}
+	if code := runREPL(cfg); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if got := cap.lastUserContent(); strings.Contains(got, "Memory hygiene check") {
+		t.Errorf("nudge should be absent when no tools are advertised; got:\n%s", got)
+	}
+}
+
+// dummyExecutor satisfies the agent.ToolExecutor interface for tests
+// that need cfg.tools to be non-empty but don't actually invoke any tools.
+type dummyExecutor struct{}
+
+func (dummyExecutor) Execute(_ context.Context, name string, _ map[string]any) (string, error) {
+	return "ok:" + name, nil
 }
