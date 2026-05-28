@@ -139,3 +139,20 @@ func extractIdleSession(ctx context.Context, a *agent.Agent, store *memory.Store
 // window to walk back through them. 20 is generous without making
 // the per-tick filesystem scan expensive.
 const memorydSessionsWindow = 20
+
+// memorydAlive reports whether the memory daemon is currently running.
+// Used by chat startup to skip the Phase 1 in-process extract +
+// consolidate path when the daemon owns that work.
+//
+// Defensively false: any error (no PID file, malformed PID, dead PID,
+// platform without daemon support) returns false, so chat keeps doing
+// Phase 1 work and memory still ends up populated. The worst case is
+// a one-time double-extract if both paths fire — Phase 1's
+// LastExtractedSession cursor catches the second pass and no-ops it.
+var memorydAlive = func() bool {
+	status, err := memoryd.CheckStatus()
+	if err != nil {
+		return false
+	}
+	return status.Running
+}
