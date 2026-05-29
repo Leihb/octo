@@ -12,13 +12,10 @@
 - `~/.octo/soul.md` —— agent 的身份、人格、行为规范。
 - `~/.octo/user.md` —— 用户的个人信息 / 画像。
 
-本轮范围（已与用户对齐）：
+用户手写这两个文件,会话启动时注入冻结的 system prompt prefix。仅用户级
+(`~/.octo/`,跨项目),符合 openclaw/hermes 的身份范式。纯 Compose 注入层,独立于 C9。
 
-- ✅ **手写 + 启动注入**：用户手写这两个文件，会话启动时注入冻结的 system prompt prefix。
-- ✅ **仅用户级**（`~/.octo/`，跨项目）—— 符合 openclaw/hermes 的身份范式。
-- ✅ **纯 Compose 注入层**，很轻；独立于 C9，可单独先做。
-- ❌ **项目级 soul/user**（不同 repo 不同 persona）—— 后续再议。
-- ❌ **管理/编辑 skill** —— 后续用 M7 skill loader 做（见 §7），不在本轮。
+范围外:项目级 soul/user(不同 repo 不同 persona);管理/编辑 skill(可用 skill loader 做,见 §7)。
 
 ## 2. 与现有来源的分工
 
@@ -63,8 +60,8 @@ persona 与行为风格，但**不应覆盖** base 的硬规范（read-before-wr
 - 这是**软约束**：注入顺序让 soul 在 base 之后，LLM 倾向后文优先，所以 persona 层 soul
   说了算；但 base 的安全规范靠其措辞 + 用户不在 soul 里写「忽略安全规范」来维持，不做技术
   强制。
-- 若日后需要硬保证，再把 base 拆成「persona 段（soul 前）+ 不可覆盖的安全段（最末）」。
-  本轮不做（过度设计）。
+- 若日后需要硬保证，再把 base 拆成「persona 段（soul 前）+ 不可覆盖的安全段（最末）」——
+  当前不做(过度设计)。
 
 ## 6. 与 C9 的协调
 
@@ -75,29 +72,12 @@ persona 与行为风格，但**不应覆盖** base 的硬规范（read-before-wr
 - 注入顺序里 `user.md` 紧跟 `memory`，二者相邻，便于模型把"手写画像 + 自动观察"作为一组
   用户上下文理解。
 
-## 7. 后续：管理/编辑 skill（不在本轮）
+## 7. 管理/编辑 skill(后续)
 
-用刚落地的 M7 skill loader 做一个 skill（如 `/identity`）帮用户查看/编辑 soul.md 与
-user.md——交互式补全字段、校验、给模板。本轮只做手写 + 注入；skill 作为独立后续。
+可用 skill loader 做一个 skill(如 `/identity`)帮用户查看/编辑 soul.md 与 user.md——交互式
+补全字段、校验、给模板。当前只做手写 + 注入。
 
-## 8. 决策记录
-
-- **D1（独立于 C9）**：手写第一层 vs 自动第二层，概念分离；纯 Compose 注入，可单独交付。
-- **D2（仅用户级）**：`~/.octo/`，跨项目；项目级 persona 留后续。
-- **D3（soul 补充非覆盖）**：base 的工具/安全规范保留；soul 在 base 后重塑 persona，软约束。
-- **D4（prompt 包内直读，不加 Compose 参数）**：与 octorules 同模式；缺失跳过。
-- **D5（编辑 skill 留后续）**：用 M7 loader 做，不在本轮。
-
-## 9. 切片
-
-1. prompt 包：`soulPath` / `userProfilePath` var + `readSoul` / `readUserProfile` +
-   `Compose` 插入 soul（base 后）、user.md（memory 后、规则前）两层。+ 测试。
-2. 文档：README 加一节（`~/.octo/soul.md` / `user.md` 是什么、注入顺序、与 octorules
-   分工）。
-
-`make vet && make test`（race）+ gofmt；跨 OS `GOOS=linux/windows go build ./...`。
-
-## 10. 测试（stdlib，无外部框架）
+## 8. 测试(stdlib,无外部框架)
 
 - `prompt`：soul 在 base 之后、user.md 在 memory/skills 之后且在 octorules 之前的顺序；
   两文件缺失各自跳过、不留空分隔；与 octorules 共存时层次正确。

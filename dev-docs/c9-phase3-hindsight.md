@@ -1,15 +1,15 @@
-# C9 Phase 3 — Hindsight (and other retrieval layers) integration
+# 检索层接入 — Hindsight(及其他检索层)
 
-> 设计依据：`c9-memory-design.md` §8。PR #118 落地了 hook 机制；本文是
-> "怎么把 Hindsight（或任何检索层）接进来" 的实操手册。
+> 设计依据：`c9-memory-design.md` §6（检索经 hook 出核心）。本文是"怎么把 Hindsight
+> （或任何检索层）接进来"的实操手册。
 
-C9 Phase 1+2 给了 octo **typed 写入 + 整合 + summary 注入**，但没有
-**检索**。设计上检索就不进 harness 核心——它经 Phase 3 的 hook 插件机制叠加，
+C9 typed memory 给了 octo **typed 写入 + 整合 + summary 注入**，但没有
+**检索**。设计上检索就不进 harness 核心——它经 hook 插件机制叠加，
 不装 Hindsight 仍能用 typed memory，装了多一路召回。
 
 ## 1. Hook surface 简要
 
-PR #118 在 REPL 的每一 turn 边界各暴露一个 hook：
+REPL 在每一 turn 边界各暴露一个 hook：
 
 | Hook | 触发 | 输入 (stdin) | 输出 (stdout) | 作用 |
 |---|---|---|---|---|
@@ -116,7 +116,7 @@ export OCTO_HOOK_TIMEOUT=2s
                        │  2. InjectContext()                  │
                        │     <user input>                     │
                        │     ---                              │
-                       │     Additional context (from hook):  │
+                       │     Additional context (from pre-turn hook):
                        │     <recall result>                  │
                        │                                      │
                        │  3. RunStream(turnInput, …)          │
@@ -131,7 +131,7 @@ export OCTO_HOOK_TIMEOUT=2s
                        └─────────────────────────────────────┘
 ```
 
-C9 Phase 1+2 的 `memory_summary.md` injection 仍然走 `prompt.Compose`
+C9 的 `memory_summary.md` injection 仍然走 `prompt.Compose`
 （system prompt 冻结 prefix）；hook 注入是 **per-turn 用户消息附加**，
 两者正交。Hindsight 召回的内容只影响当前 turn，不进 system prompt
 缓存——所以 cache key 不动，prompt 缓存仍有效。
@@ -142,8 +142,8 @@ C9 Phase 1+2 的 `memory_summary.md` injection 仍然走 `prompt.Compose`
   指向一个 wrapper script，wrapper 里 `tee /tmp/hook-stdin > /dev/null` 抓输入。
 - **hook 错误**：octo 在 stderr 打 `↳ pre-turn hook: <err>`（含 stderr tail，
   截断到 200 字符）。timeout 会显示成 `timed out after 2s`。
-- **hook 把 turn 拖慢了**：调小 `OCTO_HOOK_TIMEOUT`（最低 1s）；或在
-  pre 脚本里加 fail-fast 短路。
+- **hook 把 turn 拖慢了**：调小 `OCTO_HOOK_TIMEOUT`（任何 >0 的时长都接受，如 `500ms`；
+  上限 30s）；或在 pre 脚本里加 fail-fast 短路。
 - **Hindsight 不在线**：脚本里 `|| true` 让 recall 失败时返空 stdout，
   octo 当无召回处理，turn 正常推进。
 
@@ -161,14 +161,11 @@ Hook 是协议无关的——任何能 shell 调的检索层都能接：
 约束就两条：1) 在 timeout 内返回；2) stdout 是给模型看的纯文本或
 `{additional_context: ...}` JSON。
 
-## 7. MCP client 路径（未排期）
+## 7. MCP client 路径(备选)
 
-c9-memory-design.md §8 留了另一条路：让 octo 实现 MCP client，直接调
-Hindsight 的 `agent_knowledge_*` tools。优点是协议化、能复用其他 MCP
-server；代价是 MCP client 本身是更大的独立工作。
-
-当前 hook 路径已经够用——如果未来有强需求（比如同时接多个 MCP server），
-再做 client。这俩不冲突：可以并存，配置文件里指定每个 turn 走哪条路。
+另一条路:让 octo 经 MCP client 直接调 Hindsight 的 `agent_knowledge_*` tools。优点是
+协议化、能复用其他 MCP server;代价是 MCP client 是更大的独立工作。hook 路径已够用,两者
+不冲突、可并存(配置指定每个 turn 走哪条)。
 
 ## 8. 不做（boundary）
 
@@ -178,13 +175,5 @@ server；代价是 MCP client 本身是更大的独立工作。
   turn-level context。两者目的不同，存储不同，调用时机不同。
 - **Hindsight 失败不影响 typed memory**。即使 hook 超时 / 失败，
   `remember` 还在工作，下次 session 启动还会 inject summary。
-- **不替换原生路径**。Phase 3 是叠加层。`OCTO_HOOK_PRE_TURN` 不设
-  → 走纯原生路径（`remember` + 启动整合）。
-
-## 9. Roadmap
-
-- ✅ Hook 机制（PR #118）
-- ✅ 本文档（PR #119）
-- ⏳ 真实 Hindsight 实例跑通端到端（依赖用户本地装 Hindsight）
-- ⏳ 可选：layered config (`~/.octo/hooks.yml`) 取代纯 env vars。
-- ⏳ 可选：MCP client（另开 milestone）
+- **不替换原生路径**。检索是叠加层。`OCTO_HOOK_PRE_TURN` 不设 → 走纯原生路径
+  （`remember` + 启动整合）。

@@ -1,63 +1,50 @@
-# C11 — OS-level command sandbox (design)
+# OS-level command sandbox
 
-Status: design agreed 2026-05-27. Implements roadmap item **C11** (= M6.5 P1-2).
+An opt-in `--sandbox` confines the `terminal` tool's commands at the OS layer:
+even a permission-allowed command can't write/read outside an allowed set of
+roots or open a network connection. Defense-in-depth under the permission
+engine — not an absolute boundary against kernel exploits.
 
 ## 1. Threat model & goals
 
-The permission engine (`internal/permission`) gates the `terminal` tool at the
-**policy layer** — allow/deny/ask on the command *string* (substring + glob
-rules). That is bypassable: `python -c '…'`, `bash -c '…'`, a novel binary, or
-any command whose dangerous effect isn't captured by a substring rule can slip
-through an `allow`.
+The permission engine (`internal/permission`) gates `terminal` at the **policy
+layer** — allow/deny/ask on the command *string* (substring + glob rules). That
+is bypassable: `python -c '…'`, `bash -c '…'`, a novel binary, or any command
+whose dangerous effect isn't captured by a substring rule can slip through an
+`allow`.
 
-**Threat.** An LLM-issued or prompt-injected command that the permission engine
-allows (or that evades its rules) does one of:
-- writes/deletes files **outside the project** (e.g. `~`, `/etc`),
-- reads **secrets** (`~/.ssh`, `~/.aws`, `~/.config`),
-- **exfiltrates** data over the network.
+**Threat.** An LLM-issued or prompt-injected command the engine allows (or that
+evades its rules) writes/deletes files outside the project (`~`, `/etc`), reads
+secrets (`~/.ssh`, `~/.aws`, `~/.config`), or exfiltrates over the network.
 
-**Goal.** Even an *allowed* command cannot, as enforced by the OS (not by string
-matching):
-- write outside an allowed set of roots,
-- read outside an allowed set of roots,
-- open an IP-network connection (deny by default; allowlist later).
+**Goal.** As enforced by the OS (not string matching), even an *allowed* command
+cannot write outside an allowed root set, read outside an allowed root set, or
+open an IP-network connection (deny by default).
 
-This is **defense-in-depth**, layered under the permission engine — not an
-absolute boundary against kernel exploits.
+**Non-goals.** Full container isolation, complete syscall filtering, defeating
+local privilege escalation. The boundary is the arbitrary-command surface: the
+`terminal` tool (foreground + background).
 
-**Non-goals (this milestone).** Full container isolation, complete syscall
-filtering, defeating local privilege escalation, sandboxing our own controlled
-read-only helpers (`grep`'s `rg`). The boundary we care about is the
-arbitrary-command surface: the `terminal` tool (foreground + background).
+The sandbox is **opt-in** (`--sandbox`, default off); the permission engine +
+strict mode are the always-on backstop. It is not default-on because the network
+story is an all-or-nothing toggle (§5), so a default sandbox would break every
+network-needing command (`go mod download`, `git fetch`).
 
-## 2. Decisions (agreed)
+## 2. Integration point & abstraction
 
-- **Rollout: opt-in.** A `--sandbox` flag, default **off**. The existing strict
-  permission mode remains the backstop. Flip to default-on in a later phase once
-  proven. Does not block other work.
-- **Linux mechanism: Landlock re-exec shim** (no external dependency, fits the
-  single-binary ethos; kernel ≥ 5.13). `bwrap` is *not* a dependency.
-- **Phase 1 scope: filesystem boundary AND network deny together** (not FS only).
-
-## 3. Integration point & abstraction
-
-Two call sites build the arbitrary command today, both
-`exec.CommandContext(ctx, "sh", "-c", command)`:
-- `internal/tools/terminal.go` (foreground)
-- `internal/tools/background.go` (background)
-
-Both route through a new package:
+Both command sites — `internal/tools/terminal.go` (foreground) and
+`internal/tools/background.go` (background) — build `sh -c command` and route
+through `internal/sandbox`:
 
 ```go
-// internal/sandbox
 type Policy struct {
-    ReadRoots    []string // absolute roots readable (incl. system: /usr /bin /lib /etc, cwd, tmp)
+    ReadRoots    []string // absolute roots readable (cwd, tmp, OS system roots)
     WriteRoots   []string // absolute roots writable (cwd, $TMPDIR)
     AllowNetwork bool     // false → deny IP networking
 }
 
-// Command wraps `sh -c command` so it runs confined to p. Returns an error
-// when sandboxing was requested but is unavailable on this host (see §6).
+// Command wraps `sh -c command` so it runs confined to p. Errors when
+// sandboxing was requested but is unavailable on this host (see §6).
 func Command(ctx context.Context, command string, p Policy) (*exec.Cmd, error)
 
 // Available reports whether this OS/kernel can enforce a sandbox.
@@ -68,21 +55,19 @@ func DefaultPolicy(cwd string) Policy
 ```
 
 `DefaultPolicy(cwd)`:
-- ReadRoots: `cwd`, `$TMPDIR`/`/tmp`, and read-only system roots
-  (`/usr`, `/bin`, `/lib`, `/lib64`, `/etc`, `/opt`, `/System` on macOS, the Go
-  toolchain dir). Generous on read so normal tooling works; the credential
-  paths are excluded so secrets stay unreadable.
-- WriteRoots: `cwd`, `$TMPDIR`/`/tmp`.
-- AllowNetwork: false.
 
-Explicitly **outside** ReadRoots: `~/.ssh`, `~/.aws`, `~/.config`, `~` in
-general (only cwd + tmp are reachable under the home tree).
+- **ReadRoots**: `cwd`, `$TMPDIR`/`/tmp`, and OS-specific read-only system roots
+  (`systemReadRoots()` — `/usr /bin /lib /etc …` plus per-OS additions:
+  `/sbin /var /private /Library` on darwin, `/sbin /proc` on linux). Generous on
+  read so normal tooling works; credential paths stay excluded.
+- **WriteRoots**: `cwd`, `$TMPDIR`/`/tmp`.
+- **AllowNetwork**: false.
 
-### Plumbing the policy to the tools
+Explicitly outside ReadRoots: `~/.ssh`, `~/.aws`, `~/.config`, `~` in general
+(only cwd + tmp are reachable under the home tree).
 
-`TerminalTool` and `BackgroundManager` are stateless values in `allTools`, so —
-mirroring the existing `defaultBg` pattern — the active policy lives as a
-package-level value in `internal/tools`, set once at startup:
+`TerminalTool` and `BackgroundManager` are stateless values, so the active policy
+lives package-level (mirroring `defaultBg`), set once at startup:
 
 ```go
 // internal/tools
@@ -91,15 +76,15 @@ func SetSandbox(p *sandbox.Policy) { activeSandbox = p }
 ```
 
 `cmd/octo` calls `tools.SetSandbox(&policy)` when `--sandbox` is passed. Both
-exec sites consult `activeSandbox`: nil → today's plain `exec.CommandContext`;
-non-nil → `sandbox.Command(ctx, command, *activeSandbox)`.
+exec sites consult `activeSandbox`: nil → plain `exec.CommandContext`; non-nil →
+`sandbox.Command(ctx, command, *activeSandbox)`.
 
-## 4. macOS mechanism — Seatbelt (SBPL)
+## 3. macOS mechanism — Seatbelt (SBPL)
 
 Wrap as `sandbox-exec -p <profile> sh -c <command>`. A full `(deny default)`
-profile aborts most binaries (dyld/`/dev`/mach lookups it can't predict), so the
-profile uses an **`allow default` base** and tightens just the axes we care
-about — which proved robust in practice while still enforcing the boundary:
+profile aborts most binaries (dyld / `/dev` / mach lookups it can't predict), so
+the profile uses an **`allow default` base** and tightens just the axes we care
+about:
 
 ```scheme
 (version 1)
@@ -114,115 +99,91 @@ about — which proved robust in practice while still enforcing the boundary:
 
 Writes are a strict allowlist (deny-all then re-allow roots; the later, more
 specific rule wins). Reads are confined **within `$HOME`**: everything under
-`$HOME` is denied except the read roots, which protects every home secret
-(`~/.ssh`, `~/.aws`, …) while system paths (`/usr`, `/System`) stay readable via
-`allow default`. (This is the one place macOS is looser than Linux: Linux's
-Landlock enforces a *full* read allowlist; macOS confines reads to `$HOME`.)
+`$HOME` is denied except the read roots, protecting every home secret while
+system paths (`/usr`, `/System`) stay readable via `allow default`. This is the
+one place macOS is looser than Linux: Linux's Landlock enforces a *full* read
+allowlist; macOS confines reads to `$HOME`.
 
-`sandbox-exec` is marked deprecated by Apple but has no replacement and remains
-functional; it's the mechanism other agent tools use on macOS. `Available()`
-checks the binary exists.
+`sandbox-exec` is Apple-deprecated but has no replacement and remains functional;
+it's the mechanism other agent tools use on macOS. `Available()` checks the
+binary exists.
 
-## 5. Linux mechanism — Landlock + seccomp re-exec shim
+## 4. Linux mechanism — Landlock + seccomp re-exec shim
 
-Landlock and seccomp must be applied to the **child** *after* fork and *before*
-exec — Go's `os/exec` gives no hook there. Standard solution: a **self re-exec
-shim**.
+Landlock and seccomp must apply to the **child** after fork and before exec —
+`os/exec` gives no hook there, so octo re-execs itself: the hidden subcommand
+`octo __sandboxed-exec` (`sandbox.ShimMain`, dispatched in `cmd/octo/main.go`) receives
+the policy and the real command, and before running anything else:
 
-- A hidden subcommand, `octo __sandboxed-exec`, receives the policy (JSON via an
-  env var or a fd) and the real command.
-- In that child, before running anything else, it:
-  1. applies a **Landlock** ruleset (`github.com/landlock-lsm/go-landlock`,
-     pure Go) granting read/read-exec on ReadRoots and read-write on WriteRoots;
-  2. if `AllowNetwork=false`, installs a minimal **seccomp** BPF filter (pure
-     Go via `golang.org/x/sys/unix` `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER)`,
-     no cgo) that **denies `socket(2)` for `AF_INET`/`AF_INET6`** (filtering on
-     the domain arg) while allowing `AF_UNIX`;
-  3. `syscall.Exec`s `sh -c command`.
+1. applies a **Landlock** ruleset granting read/read-exec on ReadRoots and
+   read-write on WriteRoots — via **raw Landlock syscalls on
+   `golang.org/x/sys/unix`** (`SYS_LANDLOCK_CREATE_RULESET` / `ADD_RULE` /
+   `RESTRICT_SELF`); no third-party library, no cgo;
+2. if `AllowNetwork=false`, installs a minimal **seccomp** BPF filter (also via
+   `x/sys/unix` `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER)`) that denies
+   `socket(2)` for `AF_INET`/`AF_INET6` (filtering on the domain arg) while
+   allowing `AF_UNIX`;
+3. `syscall.Exec`s `sh -c command`.
 
-`sandbox.Command` on Linux therefore returns
-`exec.Command(self, "__sandboxed-exec", …)` where `self = os.Executable()`.
+So `sandbox.Command` on Linux returns `exec.Command(self, "__sandboxed-exec", …)`
+with `self = os.Executable()`. `Available()` probes Landlock via
+`LANDLOCK_CREATE_RULESET_VERSION` (ABI ≥ 1 → supported; ENOSYS/EOPNOTSUPP →
+kernel < 5.13 or Landlock disabled).
 
-`Available()` on Linux probes Landlock support (attempt to create a ruleset;
-ENOSYS/EOPNOTSUPP → unavailable, i.e. kernel < 5.13 or Landlock disabled).
+Notes:
 
-Notes / risks:
 - Network deny via seccomp socket-domain filtering is unprivileged and portable;
-  a network *namespace* would need a user namespace (often restricted), so
-  seccomp is the primary route. DNS is also blocked (it needs `AF_INET`), which
-  is the intended outcome under `AllowNetwork=false`.
-- seccomp can inspect scalar syscall args (domain) but not memory; filtering on
+  a network *namespace* would need a user namespace (often restricted). DNS is
+  also blocked (needs `AF_INET`), the intended outcome under `AllowNetwork=false`.
+- seccomp inspects scalar syscall args (domain) but not memory; filtering on
   `socket`'s domain is sufficient and pointer-safe.
-- Landlock is path-based and unprivileged; no namespaces required.
+- Landlock is path-based and unprivileged; no namespaces required. A known gap:
+  32-bit/compat syscalls can bypass a seccomp filter written for the native ABI.
 
-## 6. Availability & fallback
+## 5. Network: all-or-nothing
 
-`Available()==false` (kernel < 5.13, Landlock off, `sandbox-exec` missing,
-Windows):
-- **`--sandbox` explicitly requested → fail-closed**: refuse to run `terminal`,
-  with a clear message (the user asked for a guarantee we can't provide).
-- **`--sandbox=auto` (future) → warn once, fall back** to permission-engine-only.
+The network story is the `--sandbox-allow-net` toggle, not a per-host allowlist.
+Per-host filtering isn't feasible as a hard OS boundary: Linux seccomp can't
+inspect `connect()`'s destination (sockaddr is a pointer), and macOS SBPL filters
+by IP/port, not hostname. The only routes are a local HTTP(S) proxy (a *soft*
+allowlist, bypassable by raw-socket tools) or a network-namespace + NAT setup
+(heavy, needs user namespaces, still IP-only on macOS). The toggle covers the
+practical need: "this task needs the network: on; otherwise off."
 
-## 7. Windows
+## 6. Availability, fallback, Windows
 
-No lightweight equivalent (Job Objects / AppContainer are heavyweight and
-awkward). Phase 1: **unsupported** — `--sandbox` on Windows errors at startup;
-default-off means normal use is unaffected. Revisit later if needed.
+`--sandbox` with `Available()==false` (kernel < 5.13, Landlock off, `sandbox-exec`
+missing, Windows) **fails closed**: refuse to run `terminal` with a clear message
+— the user asked for a guarantee we can't provide.
 
-## 8. Phasing
+Windows has no lightweight equivalent (Job Objects / AppContainer are heavyweight
+and awkward): `--sandbox` errors at startup. Default-off means normal use is
+unaffected.
 
-- **Phase 1 (done, #82):** `internal/sandbox` abstraction + both exec sites
-  + **FS read/write roots + network deny**, on macOS (SBPL) and Linux
-  (landlock+seccomp shim); `--sandbox` flag on `octo chat` and `octo init`;
-  `Available()` probe + fail-closed; Windows unsupported.
-- **Phase 3 (done, #84):** configurable policy — `--sandbox-allow-net`,
-  `--sandbox-write <dir>`, `--sandbox-read <dir>` extend the default policy.
-- **Phase 2 — network host allowlist: dropped (decided 2026-05-27).**
-  Per-host network filtering is not feasible as a hard boundary at the OS layer:
-  Linux seccomp can't inspect `connect()`'s destination (sockaddr is a pointer),
-  and macOS SBPL filters by IP/port, not hostname. The only routes are a local
-  HTTP(S) **proxy** (a *soft* allowlist — bypassable by raw-socket tools, only
-  honored by proxy-aware tools) or a network-namespace + slirp/NAT setup (heavy,
-  needs user namespaces, still IP-only on macOS). Cost/value and the weak
-  guarantee don't justify it. **The network story is the deny-all / allow-all
-  toggle** (`--sandbox-allow-net`), which covers the practical safety need
-  ("this task needs the network: on; otherwise off"). Revisit only if a concrete
-  per-host requirement appears.
-- **Default-on: not pursued (decided 2026-05-27).** Flipping `--sandbox`
-  default-on would break every network-needing command (`go mod download`,
-  `git fetch`, …), because the network story is an all-or-nothing toggle, not a
-  per-host allowlist. The sandbox stays **opt-in** — `--sandbox` on demand; the
-  permission engine + strict mode remain the always-on backstop. Not revisited
-  unless a fine-grained network boundary appears that would make a safe default
-  viable.
+## 7. CLI
+
+`--sandbox` plus the policy extenders, on both `octo chat` and `octo init`:
+
+- `--sandbox-allow-net` — permit IP networking.
+- `--sandbox-write <dir>` — add a writable root (repeatable).
+- `--sandbox-read <dir>` — add a readable root (repeatable).
+
+## 8. Dependencies
+
+No third-party sandbox library. Landlock and the seccomp filter are hand-rolled
+on `golang.org/x/sys/unix` (already a dependency); macOS shells out to the
+system `sandbox-exec`. The single-binary ethos holds.
 
 ## 9. Testing
 
-OS-specific and not fully coverable in one CI runner. Plan:
+OS-specific, not fully coverable in one CI runner:
+
 - `//go:build darwin` / `linux` / `other` split implementations; a portable
   `Available()`-gated path.
-- Capability-gated integration tests that run **only** where the mechanism
-  works (skip otherwise): assert "write a file **inside** cwd succeeds", "write
-  **outside** cwd (e.g. `$HOME/x`) fails", "read `~/.ssh/known_hosts` fails",
-  and (network) "`curl`/a TCP connect fails" under `AllowNetwork=false`.
-- Windows / old-kernel: test the **fail-closed** branch (Available()==false →
+- Capability-gated integration tests that run only where the mechanism works:
+  "write inside cwd succeeds", "write outside cwd (`$HOME/x`) fails", "read
+  `~/.ssh/known_hosts` fails", and "a TCP connect fails" under `AllowNetwork=false`.
+- Windows / old-kernel: the **fail-closed** branch (`Available()==false` →
   `Command` errors / startup refuses).
 - The re-exec shim is exercised by spawning the test binary's own
   `__sandboxed-exec` path.
-
-## 10. New dependencies
-
-- `github.com/landlock-lsm/go-landlock` (pure Go, Linux only via build tags).
-- seccomp filter hand-rolled on `golang.org/x/sys/unix` (no cgo).
-- macOS/Windows pull in neither (build-tagged out).
-
-## 11. Task breakdown (Phase 1)
-
-1. `internal/sandbox`: `Policy`, `DefaultPolicy`, `Command`, `Available` + the
-   build-tagged darwin/linux/other files.
-2. macOS SBPL profile generator + `sandbox-exec` wrapper.
-3. Linux landlock+seccomp + the `octo __sandboxed-exec` hidden subcommand.
-4. `tools.SetSandbox` + both exec sites consult `activeSandbox`.
-5. `--sandbox` flag on `chat` and `init`; build `DefaultPolicy(cwd)`; call
-   `SetSandbox`; fail-closed when unavailable.
-6. Tests (capability-gated integration + fail-closed unit).
