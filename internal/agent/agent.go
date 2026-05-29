@@ -138,6 +138,16 @@ type Agent struct {
 	// lastInputTokens is the size of the most recently sent context, used as
 	// the compaction trigger.
 	lastInputTokens int
+
+	// steerMu guards steerBuf, the queue of "steer" messages the user typed
+	// while a turn was running. The run loop drains it at each tool-batch
+	// boundary and merges the text into the trailing tool_result message, so
+	// the model sees a mid-turn course correction without breaking the
+	// user/assistant alternation. Written from the UI goroutine via Steer,
+	// drained from the loop goroutine via drainSteer. See
+	// dev-docs/tui-input-modes-design.md §5.
+	steerMu  sync.Mutex
+	steerBuf []string
 }
 
 // StopReason sentinels set on the Reply when a loop budget is exhausted.
@@ -450,6 +460,19 @@ func (a *Agent) runLoop(
 			// can be carried through (tool_result blocks don't carry it
 			// themselves).
 			emitToolResultEvents(handler, reply.Blocks, resultBlocks)
+
+			// Steer injection (dev-docs/tui-input-modes-design.md §5): if the
+			// user typed a mid-turn message while these tools ran, fold it into
+			// the SAME user message as an extra text block. This is the only
+			// alternation-safe place to inject — the trailing message here is
+			// the user-role tool_result, and a multi-block user message of
+			// [tool_result…, text] is the API-blessed shape (Anthropic native;
+			// the OpenAI adapter emits the text as a follow-up user message).
+			// A bare NewUserMessage here would instead produce two user
+			// messages in a row.
+			if steer := a.drainSteer(); steer != "" {
+				resultBlocks = append(resultBlocks, NewTextBlock(steer))
+			}
 
 			a.History.Append(NewToolResultMessage(resultBlocks))
 			continue

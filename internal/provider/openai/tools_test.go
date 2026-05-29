@@ -276,6 +276,61 @@ func TestSend_ToolResultMessages_WireFormat(t *testing.T) {
 	}
 }
 
+// TestSend_ToolResultWithSteerText_WireFormat verifies that a user/tool_result
+// message carrying a trailing text block (a mid-turn steer the agent folded in
+// — see dev-docs/tui-input-modes-design.md §5) emits the tool output as a
+// role="tool" message AND the steer text as a separate role="user" message
+// after it, rather than silently dropping the text.
+func TestSend_ToolResultWithSteerText_WireFormat(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer srv.Close()
+
+	c, _ := New("k")
+	c.BaseURL = srv.URL
+
+	msgs := []agent.Message{
+		agent.NewUserMessage("run echo hi"),
+		agent.NewToolUseMessage([]agent.ContentBlock{
+			agent.NewToolUseBlock("call-1", "bash", map[string]any{"command": "echo hi"}),
+		}),
+		// tool_result + steer text in one user message.
+		agent.NewToolResultMessage([]agent.ContentBlock{
+			agent.NewToolResultBlock("call-1", "hi", false),
+			agent.NewTextBlock("also handle the error case"),
+		}),
+	}
+
+	if _, err := c.Send(context.Background(), provider.Request{Model: "x", Messages: msgs}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var wireReq struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			Content    string `json:"content"`
+			ToolCallID string `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &wireReq); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// user, assistant(tool_call), tool(result), user(steer)
+	if len(wireReq.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4: %s", len(wireReq.Messages), capturedBody)
+	}
+	if wireReq.Messages[2].Role != "tool" || wireReq.Messages[2].Content != "hi" {
+		t.Errorf("msg[2] = %+v, want tool/hi", wireReq.Messages[2])
+	}
+	if wireReq.Messages[3].Role != "user" || wireReq.Messages[3].Content != "also handle the error case" {
+		t.Errorf("msg[3] = %+v, want user/steer-text", wireReq.Messages[3])
+	}
+}
+
 // TestSend_NoTools_FieldAbsent ensures we don't send a "tools" key at all
 // when no tools are defined (some OpenAI-compatible servers reject the field
 // even when empty).

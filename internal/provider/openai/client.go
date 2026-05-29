@@ -263,16 +263,31 @@ func toAPIMessages(systemPrompt string, in []agent.Message) ([]apiMessage, error
 			continue
 		}
 
-		// User message with tool results — explode into individual role="tool" messages.
+		// User message with tool results — explode into individual role="tool"
+		// messages. A trailing text block (a mid-turn "steer" the agent folded
+		// into the tool_result message — see dev-docs/tui-input-modes-design.md
+		// §5) can't ride on a role="tool" message, so it's emitted as a separate
+		// role="user" message AFTER the tool outputs, which is the OpenAI-shaped
+		// equivalent of Anthropic's [tool_result…, text] user message.
 		if m.Role == agent.RoleUser && len(m.Blocks) > 0 {
+			var steerText strings.Builder
 			for _, b := range m.Blocks {
-				if b.Type == "tool_result" {
+				switch b.Type {
+				case "tool_result":
 					out = append(out, apiMessage{
 						Role:       "tool",
 						Content:    b.Result,
 						ToolCallID: b.ToolUseID,
 					})
+				case "text":
+					if steerText.Len() > 0 {
+						steerText.WriteString("\n\n")
+					}
+					steerText.WriteString(b.Text)
 				}
+			}
+			if steerText.Len() > 0 {
+				out = append(out, apiMessage{Role: "user", Content: steerText.String()})
 			}
 			continue
 		}
