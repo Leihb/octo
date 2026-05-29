@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestVersion_ChangesOnSave(t *testing.T) {
+	s := NewStoreAt(t.TempDir())
+
+	// No memory yet → empty version, no error.
+	if v, err := s.Version(); err != nil || v != "" {
+		t.Fatalf("empty store Version() = (%q, %v), want (\"\", nil)", v, err)
+	}
+
+	if err := s.Save(Entry{Name: "a", Description: "first fact", Type: TypeReference}); err != nil {
+		t.Fatal(err)
+	}
+	v1, err := s.Version()
+	if err != nil || v1 == "" {
+		t.Fatalf("after first Save: Version() = (%q, %v), want non-empty", v1, err)
+	}
+
+	// Same state → same version (stable read).
+	if v, _ := s.Version(); v != v1 {
+		t.Errorf("Version() not stable: %q vs %q", v, v1)
+	}
+
+	// A new entry changes the index → version moves.
+	if err := s.Save(Entry{Name: "b", Description: "second fact", Type: TypeReference}); err != nil {
+		t.Fatal(err)
+	}
+	if v2, _ := s.Version(); v2 == v1 {
+		t.Errorf("Version() unchanged after adding an entry: %q", v2)
+	}
+}
+
 func TestSave_GetRoundTrip(t *testing.T) {
 	s := NewStoreAt(t.TempDir())
 	in := Entry{
