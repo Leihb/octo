@@ -68,7 +68,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	providerName := fs.String("provider", "", "Provider: anthropic | openai (default from `octo config`, else anthropic)")
-	model := fs.String("model", "", "Model name (defaults to the provider's cheapest reasoning model)")
+	model := fs.String("model", "", "Model name (else ANTHROPIC_MODEL/OPENAI_MODEL env, then `octo config`, then the provider's cheapest reasoning model)")
 	system := fs.String("system", "", "System prompt (optional)")
 	maxTokens := fs.Int("max-tokens", 0, "max_tokens for the response (0 = provider default)")
 	stream := fs.Bool("stream", true, "Stream the reply (chunks printed as they arrive); --stream=false buffers")

@@ -21,14 +21,22 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// resolveProviderModel applies precedence flag > config file > built-in default
-// to the provider and model. An empty flagProvider/flagModel means "not set on
-// the CLI". ok is false when the resolved provider has no known default model
-// (i.e. an unknown provider with no explicit model) — the caller prints an
-// error and exits.
+// resolveProviderModel applies precedence flag > env > config file > built-in
+// default to the provider and model. An empty flagProvider/flagModel means "not
+// set on the CLI". ok is false when the resolved provider has no known default
+// model (i.e. an unknown provider with no explicit model) — the caller prints
+// an error and exits.
 func resolveProviderModel(flagProvider, flagModel string, cfg config.Config) (provider, model string, ok bool) {
 	provider = firstNonEmpty(flagProvider, cfg.Provider, providerAnthropic)
+	// Precedence: --model flag > env (ANTHROPIC_MODEL / OPENAI_MODEL) > config
+	// (same-provider only) > built-in default. The env tier mirrors how the
+	// base URL and key resolve env-first, so a third-party Claude-/OpenAI-
+	// compatible endpoint can be configured entirely through env vars (e.g.
+	// ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY + ANTHROPIC_MODEL).
 	model = flagModel
+	if model == "" {
+		model = modelFromEnv(provider)
+	}
 	// The config's model is specific to the config's provider — only honor it
 	// when the resolved provider matches, so `--provider <other>` doesn't carry
 	// one vendor's model onto another.
@@ -47,6 +55,19 @@ func resolveProviderModel(flagProvider, flagModel string, cfg config.Config) (pr
 func providerBaseURL(provider string, cfg config.Config) string {
 	if cfg.Provider == provider {
 		return cfg.BaseURL
+	}
+	return ""
+}
+
+// modelFromEnv returns the per-provider model env override, or "" if unset.
+// Named to match the BASE_URL / API_KEY env vars so a third-party endpoint can
+// be configured purely through the environment.
+func modelFromEnv(provider string) string {
+	switch provider {
+	case providerAnthropic:
+		return os.Getenv("ANTHROPIC_MODEL")
+	case providerOpenAI:
+		return os.Getenv("OPENAI_MODEL")
 	}
 	return ""
 }

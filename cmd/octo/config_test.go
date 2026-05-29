@@ -41,7 +41,34 @@ func TestResolveBaseURL_Precedence(t *testing.T) {
 	}
 }
 
+func TestResolveProviderModel_ModelEnv(t *testing.T) {
+	// env beats config + default, but the --model flag still beats env.
+	t.Setenv("ANTHROPIC_MODEL", "claude-from-env")
+	t.Setenv("OPENAI_MODEL", "")
+	cfg := config.Config{Provider: providerAnthropic, Model: "cfg-model"}
+
+	if _, m, _ := resolveProviderModel("", "", cfg); m != "claude-from-env" {
+		t.Errorf("env should beat config, got %q", m)
+	}
+	if _, m, _ := resolveProviderModel("", "flag-model", cfg); m != "flag-model" {
+		t.Errorf("--model flag should beat env, got %q", m)
+	}
+	// The model env is per-provider: ANTHROPIC_MODEL must not leak onto openai.
+	if _, m, _ := resolveProviderModel(providerOpenAI, "", config.Config{}); m != "gpt-4o-mini" {
+		t.Errorf("ANTHROPIC_MODEL must not affect openai, got %q (want default)", m)
+	}
+	// OPENAI_MODEL drives the openai default slot.
+	t.Setenv("OPENAI_MODEL", "deepseek-chat")
+	if _, m, _ := resolveProviderModel(providerOpenAI, "", config.Config{}); m != "deepseek-chat" {
+		t.Errorf("OPENAI_MODEL = %q, want deepseek-chat", m)
+	}
+}
+
 func TestResolveProviderModel_Precedence(t *testing.T) {
+	// Isolate from any model env vars in the host so the flag/config/default
+	// cases below are deterministic.
+	t.Setenv("ANTHROPIC_MODEL", "")
+	t.Setenv("OPENAI_MODEL", "")
 	cfg := config.Config{Provider: "openai", Model: "cfg-model"}
 	tests := []struct {
 		name              string
