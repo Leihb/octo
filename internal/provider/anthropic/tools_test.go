@@ -212,6 +212,63 @@ func TestSend_ToolResultMessage(t *testing.T) {
 	}
 }
 
+// TestSend_ToolResultWithSteerText verifies a user/tool_result message that
+// also carries a steer text block (design §5) serializes as a multi-block user
+// message [{tool_result}, {text}] — the API-blessed mid-turn-steer shape.
+func TestSend_ToolResultWithSteerText(t *testing.T) {
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","model":"x","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c, _ := New("k")
+	c.BaseURL = srv.URL
+
+	msgs := []agent.Message{
+		agent.NewUserMessage("run echo hi"),
+		agent.NewToolUseMessage([]agent.ContentBlock{
+			agent.NewToolUseBlock("call-1", "bash", map[string]any{"command": "echo hi"}),
+		}),
+		agent.NewToolResultMessage([]agent.ContentBlock{
+			agent.NewToolResultBlock("call-1", "hi", false),
+			agent.NewTextBlock("also handle the error case"),
+		}),
+	}
+
+	if _, err := c.Send(context.Background(), provider.Request{Model: "x", Messages: msgs, Tools: []agent.ToolDefinition{{Name: "bash"}}}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var wireReq struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &wireReq); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(wireReq.Messages) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(wireReq.Messages))
+	}
+
+	var userContent []map[string]any
+	if err := json.Unmarshal(wireReq.Messages[2].Content, &userContent); err != nil {
+		t.Fatalf("decode user content: %v", err)
+	}
+	if len(userContent) != 2 {
+		t.Fatalf("user content blocks = %d, want 2 (tool_result + text): %v", len(userContent), userContent)
+	}
+	if userContent[0]["type"] != "tool_result" {
+		t.Errorf("blocks[0].type = %v, want tool_result", userContent[0]["type"])
+	}
+	if userContent[1]["type"] != "text" || userContent[1]["text"] != "also handle the error case" {
+		t.Errorf("blocks[1] = %v, want text steer", userContent[1])
+	}
+}
+
 // TestSendStream_ToolUse verifies that tool_use blocks emitted during a stream
 // are accumulated and returned in resp.Blocks, and that input_json_delta
 // fragments are correctly assembled into the final Input map.

@@ -43,6 +43,11 @@ type replConfig struct {
 	// Tests that only pass cfg.stdin leave this nil; runREPL builds a
 	// scanner-backed reader over stdin for them.
 	reader lineReader
+	// view, when non-nil, is the ViewSink driving turn rendering and Ask
+	// prompts. Set by cmd/octo so the same instance backs the turn loop, the
+	// permission gate, and the asker. Tests leave it nil; runREPL builds a
+	// plainView over the resolved reader.
+	view ViewSink
 }
 
 // isFirstEverSession reports whether no sessions exist on disk yet — the
@@ -147,15 +152,22 @@ func runREPL(cfg replConfig) int {
 		}
 	}()
 
-	// Permission gating shares the REPL line reader so an interactive "ask"
-	// prompt reads from the same stdin the loop uses. Tool dispatch runs
-	// synchronously inside RunStream (which blocks this loop), so there is
-	// no concurrent access to the reader.
+	// The view sink: renders the turn (spinner, tool-event lines, cache/^C/
+	// error) and raises Ask prompts. cmd/octo supplies it (so the gate and
+	// asker share the same instance); tests leave it nil and get a plainView
+	// over the resolved reader.
+	view := cfg.view
+	if view == nil {
+		view = newPlainView(reader, cfg.stdout, cfg.stderr, cfg.verbosity, cfg.plain)
+	}
+
+	// Permission gating raises its approval prompt through the view (stdin
+	// line in plainView, modal in the TUI). Tool dispatch runs synchronously
+	// inside RunStream, so the prompt and the loop never race on input.
 	if cfg.permEngine != nil {
 		a.Gate = &cliPermissionGate{
 			engine: cfg.permEngine,
-			in:     reader,
-			out:    cfg.stdout,
+			ask:    view,
 		}
 	}
 
@@ -236,104 +248,22 @@ func runREPL(cfg replConfig) int {
 
 		// Regular message — streaming turn (or agentic loop when tools enabled).
 		// Each turn gets its own cancellable context so SIGINT can interrupt
-		// just this turn without tearing down the session.
+		// just this turn without tearing down the session. Orchestration
+		// (memory nudge, pre/post hooks, the streaming run) lives in runTurn;
+		// all rendering flows through the view sink.
 		turnCtx, cancelTurn := context.WithCancel(context.Background())
 		setTurnCancel(cancelTurn)
 
-		// C9 Phase 3 pre-turn hook: feed the user input to an external
-		// retrieval layer (Hindsight); whatever it returns gets folded
-		// into the user message before the model sees it. Hook errors
-		// are logged but never block the turn — the user still gets
-		// their reply.
-		turnInput := line
-		// Memory-hygiene nudge: appended to the user message when both
-		// cross-session memory and the `remember` tool are active, so
-		// the model is reminded to scan for durable signals at the
-		// precise decision point. Gated on tools being on because the
-		// nudge is asking the model to call a tool — pointless to ask
-		// when no tools are advertised.
-		if cfg.memStore != nil && len(cfg.tools) > 0 {
-			turnInput = appendMemoryNudge(turnInput)
-		}
-		if cfg.hooks.Configured() {
-			extra, herr := cfg.hooks.Pre(turnCtx, line)
-			if herr != nil {
-				fmt.Fprintf(cfg.stderr, "↳ pre-turn hook: %v\n", herr)
-			}
-			turnInput = hooks.InjectContext(turnInput, extra)
-		}
+		_, err := runTurn(turnCtx, a, cfg, view, line)
 
-		var (
-			reply agent.Reply
-			err   error
-		)
-		// Spinner during the "model is thinking, nothing on screen yet"
-		// pause. Auto-no-ops in quiet mode and non-tty stdout (tests,
-		// pipes). 250ms grace period so a fast reply doesn't blink it.
-		var spin *spinner
-		if !cfg.verbosity.quiet() {
-			spin = newSpinner(cfg.stdout, "thinking…")
-			spin.Start(250 * time.Millisecond)
-		}
-		if len(cfg.tools) > 0 && cfg.executor != nil {
-			// Tool events become inline status lines so the user can see what
-			// the agent is doing instead of staring at a blank terminal while
-			// a tool runs. Text deltas stream as before. Output is muted on
-			// EventToolDone — the tool's own product (file written, command
-			// stdout, etc.) is conversational state for the LLM, not user-
-			// facing chrome. EventTurnDone is also silent; the trailing
-			// newline below marks the visible turn boundary.
-			inner := replToolEventHandler(cfg.stdout, cfg.plain)
-			reply, err = a.RunStream(turnCtx, turnInput, cfg.tools, cfg.executor, func(ev agent.AgentEvent) {
-				spin.Stop() // idempotent; first event of any kind clears the line
-				inner(ev)
-			})
-		} else {
-			reply, err = a.TurnStream(turnCtx, turnInput, func(delta string) {
-				spin.Stop()
-				fmt.Fprint(cfg.stdout, delta)
-			})
-		}
-		spin.Stop() // belt-and-braces in case the turn produced zero events
 		setTurnCancel(nil)
 		cancelTurn()
 
-		// C9 Phase 3 post-turn hook: fire-and-forget the just-finished
-		// turn at the retain side (Hindsight stores it for future
-		// recall). Runs only on a successful turn — errors / interrupts
-		// don't pollute the retention index. Sync but timeout-bounded
-		// so a flaky hook can't pile up unbounded goroutines.
-		if err == nil && cfg.hooks.Configured() {
-			if herr := cfg.hooks.Post(context.Background(), line, reply.Content); herr != nil {
-				fmt.Fprintf(cfg.stderr, "↳ post-turn hook: %v\n", herr)
-			}
-		}
-
-		switch {
-		case errors.Is(err, context.Canceled):
-			// Ctrl-C: the agent already finalized history into a well-formed
-			// state. Acknowledge and fall through to auto-save so the next turn
-			// continues cleanly.
-			fmt.Fprintln(cfg.stdout, "\n^C interrupted")
-		case err != nil:
-			fmt.Fprintf(cfg.stderr, "\nerror: %v\n", err)
+		// A hard (non-interrupt) error left history rolled back by the agent;
+		// skip the save and re-prompt. An interrupt (context.Canceled) keeps a
+		// well-formed history, so it falls through to auto-save like a success.
+		if err != nil && !errors.Is(err, context.Canceled) {
 			continue
-		default:
-			fmt.Fprintln(cfg.stdout) // newline after streamed reply
-			// Surface cache activity per turn so the win is visible (and
-			// tunable). Suppressed in quiet mode; always-on in verbose
-			// even when cache didn't move (so "cache: 0 read, 0 write" is
-			// a useful debugging signal in verbose).
-			if !cfg.verbosity.quiet() {
-				show := reply.CacheReadTokens > 0 || reply.CacheWriteTokens > 0
-				if cfg.verbosity.verbose() {
-					show = true
-				}
-				if show {
-					fmt.Fprintf(cfg.stdout, "  ⓘ cache: %d read, %d write (in %d / out %d)\n",
-						reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens)
-				}
-			}
 		}
 
 		// Auto-save after every turn (including interrupted ones — history is
