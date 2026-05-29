@@ -63,6 +63,29 @@ func (s *scannerLineReader) ReadLine(prompt string) (string, bool) {
 func (*scannerLineReader) Interrupted() bool { return false }
 func (*scannerLineReader) Close() error      { return nil }
 
+// seededLineReader returns seed as the result of the first ReadLine call, then
+// delegates to inner for every subsequent call. It lets --prompt-file inject a
+// single multi-line agentic turn: the scanner reader splits a multi-line prompt
+// on '\n' into one turn per line, so a piped issue body would otherwise arrive
+// as dozens of fragmented, low-context turns (the failure mode that crippled
+// the mswe-eval harness). The seed is delivered verbatim — newlines intact.
+type seededLineReader struct {
+	seed  string
+	used  bool
+	inner lineReader
+}
+
+func (s *seededLineReader) ReadLine(prompt string) (string, bool) {
+	if !s.used {
+		s.used = true
+		return s.seed, true
+	}
+	return s.inner.ReadLine(prompt)
+}
+
+func (s *seededLineReader) Interrupted() bool { return s.inner.Interrupted() }
+func (s *seededLineReader) Close() error      { return s.inner.Close() }
+
 // readlineLineReader is the interactive-tty implementation.
 type readlineLineReader struct {
 	rl          *readline.Instance

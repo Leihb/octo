@@ -40,6 +40,29 @@ func TestScannerLineReader_StripsCarriageReturn(t *testing.T) {
 	}
 }
 
+func TestSeededLineReader_SeedThenDelegates(t *testing.T) {
+	var out bytes.Buffer
+	// A multi-line seed must come back as ONE turn, newlines intact — the whole
+	// point of --prompt-file vs piping the prompt line-by-line.
+	seed := "line one\nline two\nline three"
+	inner := newScannerLineReader(strings.NewReader("next\n"), &out)
+	r := &seededLineReader{seed: seed, inner: inner}
+
+	got, ok := r.ReadLine("you> ")
+	if !ok || got != seed {
+		t.Fatalf("first ReadLine = (%q, %v); want the full multi-line seed", got, ok)
+	}
+	// Second call delegates to the inner scanner.
+	got, ok = r.ReadLine("you> ")
+	if !ok || got != "next" {
+		t.Fatalf("second ReadLine = (%q, %v); want (\"next\", true) from inner", got, ok)
+	}
+	// Third call hits inner EOF.
+	if _, ok := r.ReadLine(""); ok {
+		t.Errorf("expected EOF from inner after its single line")
+	}
+}
+
 func TestReadPromptLine_SingleLine(t *testing.T) {
 	var out bytes.Buffer
 	r := newScannerLineReader(strings.NewReader("hello\n"), &out)

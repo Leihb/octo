@@ -283,14 +283,20 @@ func (c *Client) SendStream(ctx context.Context, req provider.Request, cb provid
 }
 
 // streamingHTTPClient returns an http.Client suitable for long-lived SSE
-// reads. When the caller has injected c.HTTPClient (typically a test using
-// httptest), that client is reused — httptest responses are fast enough
-// that their default behaviour is fine. Otherwise we synthesise a fresh
-// client with NO end-to-end Timeout so multi-minute generations complete;
-// cancellation falls back to the request context.
+// reads. An injected c.HTTPClient (production New() sets one with a 60s
+// Timeout; tests inject httptest clients) is reused for its Transport / jar /
+// redirect config, but its end-to-end Timeout is dropped: a Client.Timeout
+// applies to the whole request including the streaming body read, so a
+// legitimate multi-minute generation would be killed mid-stream with
+// "context deadline exceeded". Streaming cancellation instead comes from the
+// request context plus the per-read idle timeout in SendStream
+// (retry.IdleTimeoutReader). With no injected client we synthesise a fresh
+// one, which already has no Timeout.
 func (c *Client) streamingHTTPClient() *http.Client {
 	if c.HTTPClient != nil {
-		return c.HTTPClient
+		clone := *c.HTTPClient
+		clone.Timeout = 0
+		return &clone
 	}
 	return &http.Client{}
 }

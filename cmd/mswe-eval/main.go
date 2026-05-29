@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -160,6 +161,7 @@ func runGenerate(args []string) error {
 	model := fs.String("model", "", "model passed to octo (empty = octo default)")
 	provider := fs.String("provider", "", "provider passed to octo (empty = octo default)")
 	octoTimeout := fs.Duration("octo-timeout", 8*time.Minute, "kill an octo run after this long (guards against a stalled model stream hanging the batch)")
+	maxTurns := fs.Int("max-turns", 50, "octo --max-turns: model round-trips per task. Real SWE issues need to read several files, plan, then edit; octo's interactive default (20) starves them, and an unattended run can't say 'continue'.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -186,7 +188,7 @@ func runGenerate(args []string) error {
 	var preds []mswe.Prediction
 	for i, inst := range insts {
 		fmt.Printf("[%d/%d] %s — clone + run octo…\n", i+1, len(insts), inst.ID())
-		patch, err := generateOne(inst, octoAbs, evalHome, *workdir, *model, *provider, *octoTimeout)
+		patch, err := generateOne(inst, octoAbs, evalHome, *workdir, *model, *provider, *octoTimeout, *maxTurns)
 		if err != nil {
 			fmt.Printf("        ! skipped: %v\n", err)
 			continue
@@ -213,7 +215,7 @@ func runGenerate(args []string) error {
 
 // generateOne clones the instance's repo at its base commit, drives octo to
 // resolve the issue, and returns the test-scoped diff.
-func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider string, timeout time.Duration) (string, error) {
+func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider string, timeout time.Duration, maxTurns int) (string, error) {
 	if inst.BaseCommit() == "" {
 		return "", fmt.Errorf("no base commit (run `inspect` to confirm the field name)")
 	}
@@ -230,25 +232,37 @@ func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider
 		return "", fmt.Errorf("checkout %s: %v (%s)", inst.BaseCommit(), err, truncate(out, 200))
 	}
 
-	// Drive octo through REPL mode (prompt piped on stdin, EOF ends it). The
-	// agentic tool-execution loop only runs in REPL mode — a single-turn
-	// `octo chat "msg"` does one model round-trip WITHOUT executing tools, so it
-	// would never edit files. Strict perms + the eval HOME's permissive
+	// Drive octo through REPL mode (the agentic tool-execution loop only runs
+	// in REPL mode — a single-turn `octo chat "msg"` does one model round-trip
+	// WITHOUT executing tools, so it would never edit files). The issue is
+	// delivered via --prompt-file as ONE multi-line turn: octo's piped REPL
+	// reads stdin line-by-line (one turn per line), so passing a multi-line
+	// prompt on stdin shreds the issue body into dozens of fragmented,
+	// low-context turns. Strict perms + the eval HOME's permissive
 	// permissions.yml let tools run without prompts; --no-save keeps the
-	// throwaway session out of history.
+	// throwaway session out of history. The prompt file lives in workdir (not
+	// repoDir) so `git add -A` below doesn't sweep it into the patch.
 	env := append(os.Environ(), "HOME="+evalHome)
-	octoArgs := []string{"chat", "--tools", "--permission-mode", "strict", "--no-save", "--plain"}
+	promptPath := filepath.Join(workdir, fmt.Sprintf("prompt-%s__%s__%d.txt", inst.Org(), inst.Repo(), inst.Number()))
+	if err := os.WriteFile(promptPath, []byte(octoPrompt(inst)), 0o644); err != nil {
+		return "", fmt.Errorf("write prompt file: %v", err)
+	}
+	octoArgs := []string{"chat", "--tools", "--permission-mode", "strict", "--no-save", "--plain", "--prompt-file", promptPath}
+	if maxTurns > 0 {
+		octoArgs = append(octoArgs, "--max-turns", strconv.Itoa(maxTurns))
+	}
 	if model != "" {
 		octoArgs = append(octoArgs, "--model", model)
 	}
 	if provider != "" {
 		octoArgs = append(octoArgs, "--provider", provider)
 	}
-	// Per-instance timeout: a stalled model stream has no read deadline in octo
-	// and would otherwise hang the whole batch, so kill octo after `timeout`.
+	// Per-instance timeout backstops a turn that genuinely won't converge (the
+	// streaming idle-timeout in octo handles a stalled connection); kill octo
+	// after `timeout`. Empty stdin → after the seeded turn, EOF ends the session.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	octoOut, oerr := runStdin(ctx, repoDir, env, octoPrompt(inst)+"\n", octoBin, octoArgs...)
+	octoOut, oerr := runStdin(ctx, repoDir, env, "", octoBin, octoArgs...)
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Printf("        (octo hit the %s timeout — killed; capturing whatever it changed)\n", timeout)
 	}
@@ -317,6 +331,7 @@ func runJudge(args []string) error {
 	_ = fs.String("model", "", "")
 	_ = fs.String("provider", "", "")
 	_ = fs.Duration("octo-timeout", 0, "")
+	_ = fs.Int("max-turns", 0, "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,6 +101,75 @@ func TestRunChat_HonoursAnthropicBaseURL(t *testing.T) {
 	}
 	if gotPath != "/v1/messages" {
 		t.Errorf("path = %q, want /v1/messages", gotPath)
+	}
+}
+
+// TestRunChat_PromptFile_SingleTurn verifies --prompt-file delivers a
+// multi-line prompt as ONE user turn (newlines intact) rather than splitting it
+// into one turn per line — the bug that crippled the mswe-eval harness.
+func TestRunChat_PromptFile_SingleTurn(t *testing.T) {
+	var requests int
+	var lastUserContent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &req)
+		for _, m := range req.Messages {
+			if m.Role != "user" {
+				continue
+			}
+			// Content is either a plain JSON string or a [{type:text,text}] array.
+			var s string
+			if json.Unmarshal(m.Content, &s) == nil {
+				lastUserContent = s
+				continue
+			}
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(m.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" {
+						lastUserContent = b.Text
+					}
+				}
+			}
+		}
+		_, _ = w.Write([]byte(`{"id":"m","type":"message","role":"assistant","model":"x",
+			"content":[{"type":"text","text":"ok"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv("ANTHROPIC_API_KEY", "k")
+	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
+
+	prompt := "Fix the bug.\n\n--- ISSUE ---\nStep 1\nStep 2\nStep 3"
+	pf := filepath.Join(t.TempDir(), "prompt.txt")
+	if err := os.WriteFile(pf, []byte(prompt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	// Empty stdin → after the seeded turn, EOF ends the session. --no-tools /
+	// --no-memory keep it a single clean user message (no tool loop, no nudge).
+	code := runChat([]string{"--prompt-file", pf, "--model", "x", "--no-tools", "--no-memory", "--stream=false"},
+		strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
+	}
+	if requests != 1 {
+		t.Errorf("endpoint saw %d requests, want exactly 1 (the multi-line prompt must be ONE turn)", requests)
+	}
+	if lastUserContent != prompt {
+		t.Errorf("user message = %q, want the full multi-line prompt %q", lastUserContent, prompt)
 	}
 }
 

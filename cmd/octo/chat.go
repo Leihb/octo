@@ -81,6 +81,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	noTools := fs.Bool("no-tools", false, "Disable the built-in tools (and MCP/skill execution) — plain chat only")
 	noMemory := fs.Bool("no-memory", false, "Disable cross-session memory (the remember tool + memory injection)")
 	plain := fs.Bool("plain", false, "Render tool events as one-line ↳ status lines instead of rich diff cards")
+	promptFile := fs.String("prompt-file", "", "Read a single multi-line prompt from this file and run it as one agentic turn (newlines preserved), then continue reading turns from stdin. For scripting/eval; avoids the one-turn-per-line split of piped multi-line input.")
 	noTUI := fs.Bool("no-tui", false, "Disable the interactive TUI on a terminal; use the plain line-based REPL (also OCTO_TUI=0)")
 	quietFlag := fs.Bool("quiet", false, "Strip all status chrome (no spinner, no banner, no cache line). Also OCTO_VERBOSITY=quiet.")
 	verboseFlag := fs.Bool("verbose", false, "Print extra context (provider/model/endpoint, always-on cache line). Also OCTO_VERBOSITY=verbose.")
@@ -147,6 +148,27 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	userInput := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	isREPL := userInput == ""
+
+	// --prompt-file seeds the agentic REPL with one multi-line initial turn.
+	// It's mutually exclusive with a positional message (which is single-turn,
+	// tool-free) — accepting both would silently drop one.
+	var seedPrompt string
+	if *promptFile != "" {
+		if !isREPL {
+			fmt.Fprintln(stderr, "octo chat: --prompt-file cannot be combined with a positional message")
+			return 2
+		}
+		b, err := os.ReadFile(*promptFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "octo chat: --prompt-file: %v\n", err)
+			return 1
+		}
+		seedPrompt = strings.TrimRight(string(b), "\n")
+		if strings.TrimSpace(seedPrompt) == "" {
+			fmt.Fprintln(stderr, "octo chat: --prompt-file is empty")
+			return 2
+		}
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -278,7 +300,9 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// useTUI: an interactive terminal drives the bubbletea TUI unless the user
 	// (or OCTO_TUI=0) opted out. Piped / redirected stdin always uses the plain
 	// line-based path (tests, mswe-eval, CI). See design §5, §12.
-	useTUI := isREPL && stdinIsTTY(stdin) && !*noTUI && !tuiDisabledByEnv()
+	// --prompt-file forces the plain line-based path: seeding the turn relies
+	// on the scanner reader, and the TUI owns its own input.
+	useTUI := isREPL && stdinIsTTY(stdin) && !*noTUI && !tuiDisabledByEnv() && seedPrompt == ""
 	if isREPL {
 		toolExecutor = tools.NewDefaultRegistry()
 		tools.SetSpawner(newAgentSpawner(a, toolExecutor, tools.DefaultTools))
@@ -298,6 +322,12 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				}
 			} else {
 				replReader = newScannerLineReader(stdin, stdout)
+			}
+			// --prompt-file: deliver the file as the first turn verbatim, then
+			// fall through to stdin. Wrapping here (before the view/asker are
+			// built) means the loop, gate, and asker share the one seeded reader.
+			if seedPrompt != "" {
+				replReader = &seededLineReader{seed: seedPrompt, inner: replReader}
 			}
 			// One view backs the turn loop, the permission gate, and the asker,
 			// so they share a single presentation surface. Built here because

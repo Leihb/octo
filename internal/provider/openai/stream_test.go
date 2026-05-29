@@ -145,6 +145,27 @@ func TestSendStream_OpenAI_UsageChunkParsed(t *testing.T) {
 	}
 }
 
+// TestStreamingHTTPClient_OpenAI_DropsTimeout ensures the streaming client
+// drops the injected client's end-to-end Timeout while preserving Transport,
+// without mutating the original.
+func TestStreamingHTTPClient_OpenAI_DropsTimeout(t *testing.T) {
+	tr := &http.Transport{}
+	c := &Client{HTTPClient: &http.Client{Timeout: 60 * time.Second, Transport: tr}}
+	got := c.streamingHTTPClient()
+	if got.Timeout != 0 {
+		t.Errorf("streaming client Timeout = %v, want 0", got.Timeout)
+	}
+	if got == c.HTTPClient {
+		t.Error("streaming client must be a clone, not the injected client")
+	}
+	if got.Transport != tr {
+		t.Error("clone must preserve the injected Transport")
+	}
+	if c.HTTPClient.Timeout != 60*time.Second {
+		t.Errorf("injected client Timeout was mutated to %v, want 60s", c.HTTPClient.Timeout)
+	}
+}
+
 // TestSendStream_OpenAI_IdleTimeout verifies that a server which sends a
 // partial stream and then goes silent (without closing) trips the idle guard
 // instead of blocking forever.
