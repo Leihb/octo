@@ -59,6 +59,28 @@ func TestTUI_RunningEnterSteers(t *testing.T) {
 	}
 }
 
+func TestTUI_CtrlXUnqueuesMostRecent(t *testing.T) {
+	m := newTestModel()
+	m.turnRunning = true
+	m.queue = []pendingItem{{text: "first"}, {text: "second"}}
+
+	// Ctrl+X drops the most-recently queued item.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if len(m.queue) != 1 || m.queue[0].text != "first" {
+		t.Fatalf("Ctrl+X should drop the last queued item, got %+v", m.queue)
+	}
+	// Repeat clears the rest.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if len(m.queue) != 0 {
+		t.Fatalf("repeated Ctrl+X should empty the queue, got %+v", m.queue)
+	}
+	// Ctrl+X on an empty queue is a harmless no-op.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlX})
+	if len(m.queue) != 0 {
+		t.Errorf("Ctrl+X on empty queue should be a no-op")
+	}
+}
+
 func TestTUI_RunningAltEnterQueues(t *testing.T) {
 	m := newTestModel()
 	m.turnRunning = true

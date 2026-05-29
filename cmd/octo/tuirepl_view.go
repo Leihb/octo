@@ -57,6 +57,17 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input = nil
 		return m, nil
 
+	case tea.KeyCtrlX:
+		// Cancel the most-recently queued message. The queue survives Esc
+		// (interrupt only stops the running turn), so this is the way to undo a
+		// mis-queued Alt+Enter; repeat to clear the queue.
+		if n := len(m.queue); n > 0 {
+			dropped := m.queue[n-1].text
+			m.queue = m.queue[:n-1]
+			return m, tea.Println(queueStyle.Render("✕ unqueued: " + dropped))
+		}
+		return m, nil
+
 	case tea.KeyEnter:
 		return m.submit(msg.Alt)
 
@@ -336,6 +347,9 @@ func (m *tuiModel) renderStatusBar() string {
 	hint := "Enter send · /exit quit · Ctrl+D quit"
 	if m.turnRunning {
 		hint = "Enter steer · Alt+Enter queue · Esc interrupt"
+	}
+	if len(m.queue) > 0 {
+		hint += " · Ctrl+X unqueue"
 	}
 	return statusStyle.Render(strings.Join(segs, " · ")) + "\n" + hintStyle.Render(hint)
 }
