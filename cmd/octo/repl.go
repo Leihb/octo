@@ -18,7 +18,6 @@ import (
 	"github.com/Leihb/octo-agent/internal/permission"
 	"github.com/Leihb/octo-agent/internal/skills"
 	"github.com/Leihb/octo-agent/internal/tools"
-	"github.com/Leihb/octo-agent/internal/tui"
 )
 
 // replConfig holds everything runREPL needs.
@@ -542,12 +541,13 @@ func formatSessionList(sessions []*agent.Session) string {
 // newline before the FIRST status line of a turn — without it the marker
 // would butt up against the trailing character of the assistant's
 // "I'll now run terminal..." sentence.
+// plain is retained for signature stability but no longer toggles card
+// rendering: the plain / non-TTY path is always one-line tool status now;
+// rich cards are TUI-only (see dev-docs/tui-ux-upgrade-design.md decision #8).
 func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
+	_ = plain
 	// Per-tool-call start times so EventToolDone can report elapsed.
 	startedAt := make(map[string]time.Time)
-	// Cache the input from tool_started so the corresponding tool_done can
-	// render a card without depending on the executor surfacing it back.
-	startedInput := make(map[string]map[string]any)
 	// Track whether the previous event was a text delta — if so, a tool
 	// status line needs a leading newline to start cleanly.
 	prevWasText := false
@@ -587,20 +587,9 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 				prevWasText = false
 			}
 			startedAt[ev.ToolID] = time.Now()
-			startedInput[ev.ToolID] = ev.Input
-			// Tools that render a card on EventToolDone suppress the leading
-			// status line so the card stands on its own.
-			if rendersAsCard(ev.ToolName, plain) {
-				return
-			}
 			fmt.Fprintf(stdout, "↳ %s: %s\n", ev.ToolName, summariseInput(ev.Input))
 
 		case agent.EventToolProgress:
-			// Card-rendering tools defer all output to their tool_done card,
-			// so progress chunks are dropped to avoid double-rendering.
-			if rendersAsCard(ev.ToolName, plain) {
-				return
-			}
 			fmt.Fprintf(stdout, "│ %s\n", ev.Chunk)
 
 		case agent.EventToolDone:
@@ -608,13 +597,6 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 			if t, ok := startedAt[ev.ToolID]; ok {
 				elapsed = time.Since(t).Round(time.Millisecond)
 				delete(startedAt, ev.ToolID)
-			}
-			input := startedInput[ev.ToolID]
-			delete(startedInput, ev.ToolID)
-
-			if rendersAsCard(ev.ToolName, plain) {
-				fmt.Fprintln(stdout, renderToolCard(ev.ToolName, input))
-				return
 			}
 			fmt.Fprintf(stdout, "↳ %s ✓ (%s)\n", ev.ToolName, elapsed)
 
@@ -624,7 +606,6 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 				elapsed = time.Since(t).Round(time.Millisecond)
 				delete(startedAt, ev.ToolID)
 			}
-			delete(startedInput, ev.ToolID)
 			fmt.Fprintf(stdout, "↳ %s ✗ (%s) — %s\n", ev.ToolName, elapsed, truncate1Line(ev.Err))
 
 			// EventTurnDone is silent — the trailing newline emitted by the
@@ -637,33 +618,6 @@ func replToolEventHandler(stdout io.Writer, plain bool) func(agent.AgentEvent) {
 // reasonably-sized terminal without wrapping. The exact value isn't
 // load-bearing — pick something visually pleasant.
 const inputDotsCap = 40
-
-// rendersAsCard reports whether a tool's events should be rendered as a
-// rich diff/result card (true) or as a terse `↳ status` line (false).
-// The set is intentionally small — only edit_file today.
-func rendersAsCard(toolName string, plain bool) bool {
-	if plain {
-		return false
-	}
-	switch toolName {
-	case "edit_file":
-		return true
-	}
-	return false
-}
-
-// renderToolCard dispatches to the per-tool card renderer. Returns the
-// fully-rendered, ANSI-coloured card as a string with no trailing newline.
-func renderToolCard(toolName string, input map[string]any) string {
-	switch toolName {
-	case "edit_file":
-		path, _ := input["path"].(string)
-		oldStr, _ := input["old_string"].(string)
-		newStr, _ := input["new_string"].(string)
-		return tui.RenderEditCard(path, oldStr, newStr)
-	}
-	return ""
-}
 
 // summariseInput renders a short single-line description of the tool's input
 // for inline display. Keys are sorted so the line is stable; long values are
