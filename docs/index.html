@@ -118,8 +118,11 @@
 
     <section class="install">
       <h2>Install</h2>
+      <p style="color: var(--muted); font-size: 0.9rem; margin-top: 0;">Download a prebuilt binary for macOS / Linux / Windows (amd64 + arm64) — no Go toolchain needed:</p>
+      <pre><code><a href="https://github.com/Leihb/octo-agent/releases/latest" style="color: inherit;">github.com/Leihb/octo-agent/releases/latest</a></code></pre>
+      <p style="color: var(--muted); font-size: 0.9rem;">Or, with Go ≥ 1.22:</p>
       <pre><code>go install github.com/Leihb/octo-agent/cmd/octo@latest</code></pre>
-      <p style="color: var(--muted); font-size: 0.9rem;">Requires Go ≥ 1.22. Single binary, no runtime dependencies. Run <code class="inline">octo chat</code> for the CLI; Web UI and IM bridges land in later milestones.</p>
+      <p style="color: var(--muted); font-size: 0.9rem;">Single binary, no runtime dependencies. Run <code class="inline">octo config</code> once to set your provider/key, then <code class="inline">octo chat</code>. Web UI and IM bridges land in later milestones.</p>
     </section>
 
     <section>
@@ -127,7 +130,7 @@
       <div class="grid">
         <div class="card">
           <h3>Terminal</h3>
-          <p>First-class CLI. Streaming, tool calls, sessions, skills.</p>
+          <p>First-class CLI. Streaming, tool calls, sessions, skills, MCP.</p>
         </div>
         <div class="card">
           <h3>Web UI</h3>
