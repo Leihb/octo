@@ -237,8 +237,14 @@ func (m *tuiModel) View() string {
 	if p := m.partial.String(); p != "" {
 		b.WriteString(p)
 		b.WriteByte('\n')
+	}
+	// Animated activity indicator: a running card-tool, else the "thinking"
+	// placeholder during the initial wait. Both tick via spinnerFrame.
+	if m.running != nil {
+		b.WriteString(m.spinnerLine(m.running.verb+"("+m.running.target+")", m.running.start))
+		b.WriteByte('\n')
 	} else if m.turnRunning && !m.streaming {
-		b.WriteString(hintStyle.Render("thinking…"))
+		b.WriteString(m.spinnerLine(m.thinkingPhrase(), m.turnStart))
 		b.WriteByte('\n')
 	}
 
@@ -257,6 +263,23 @@ func (m *tuiModel) View() string {
 	b.WriteByte('\n')
 	b.WriteString(m.renderStatusBar())
 	return b.String()
+}
+
+// thinkingPhrases rotate (slowly) on the initial-wait placeholder so the
+// pause feels alive, CC-style. Cycled by spinnerFrame.
+var thinkingPhrases = []string{"Thinking", "Pondering", "Working", "Reasoning"}
+
+func (m *tuiModel) thinkingPhrase() string {
+	// ~16 ticks (~2s at 120ms) per phrase.
+	return thinkingPhrases[(m.spinnerFrame/16)%len(thinkingPhrases)]
+}
+
+// spinnerLine renders one animated activity line: a braille frame, a label,
+// and elapsed seconds since the given start. Reuses the plain spinner's frame
+// set (spinner.go) so the two paths look consistent.
+func (m *tuiModel) spinnerLine(label string, since time.Time) string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return hintStyle.Render(fmt.Sprintf("%c %s (%s)", frame, label, time.Since(since).Round(time.Second)))
 }
 
 // renderInputBox draws the prompt + current input inside a rounded border,
