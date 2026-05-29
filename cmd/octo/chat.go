@@ -383,20 +383,27 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			sess = agent.NewSession(resolvedModel, *system)
 		}
 
+		// Live cross-session memory delta, scoped to the same project root the
+		// startup injection used so the filtering agrees. nil when memory is off.
+		var memRefresh *memoryRefresher
+		if memStore != nil {
+			memRefresh = newMemoryRefresher(memStore, memory.ProjectRoot(cwd))
+		}
 		cfg := replConfig{
-			a:         a,
-			session:   sess,
-			noSave:    *noSave,
-			plain:     *plain,
-			verbosity: resolveVerbosity(*quietFlag, *verboseFlag),
-			stdin:     stdin,
-			stdout:    stdout,
-			stderr:    stderr,
-			skillReg:  skillReg,
-			memStore:  memStore,
-			reader:    replReader,          // shared with the asker / permission gate
-			view:      replView,            // same surface for turn render + Ask prompts
-			hooks:     hooks.LoadFromEnv(), // C9 Phase 3: external retrieval layer hooks
+			a:          a,
+			session:    sess,
+			noSave:     *noSave,
+			plain:      *plain,
+			verbosity:  resolveVerbosity(*quietFlag, *verboseFlag),
+			stdin:      stdin,
+			stdout:     stdout,
+			stderr:     stderr,
+			skillReg:   skillReg,
+			memStore:   memStore,
+			memRefresh: memRefresh,
+			reader:     replReader,          // shared with the asker / permission gate
+			view:       replView,            // same surface for turn render + Ask prompts
+			hooks:      hooks.LoadFromEnv(), // C9 Phase 3: external retrieval layer hooks
 		}
 		if toolsOn {
 			// Spawner is already registered above (before the memory pass) so
