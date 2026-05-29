@@ -17,18 +17,32 @@ A functionality-first AI agent, distributed as a single Go binary. Speaks two na
 
 ## Install
 
-Until tagged releases ship, build from source:
+**Prebuilt binary (no Go toolchain needed).** Grab the archive for your OS/arch
+from the [latest release](https://github.com/Leihb/octo-agent/releases/latest),
+unpack it, and put `octo` on your `PATH`:
+
+```bash
+# macOS (Apple Silicon) example — swap the asset name for your platform
+curl -sSL https://github.com/Leihb/octo-agent/releases/latest/download/octo_<version>_darwin_arm64.tar.gz | tar xz
+sudo mv octo /usr/local/bin/
+octo version
+```
+
+Archives ship for linux / darwin / windows on amd64 + arm64; `checksums.txt`
+in each release verifies the download.
+
+**From Go:**
+
+```bash
+go install github.com/Leihb/octo-agent/cmd/octo@latest
+```
+
+**From source:**
 
 ```bash
 git clone https://github.com/Leihb/octo-agent.git
 cd octo-agent
 make build       # produces ./octo
-```
-
-Or install directly from Go:
-
-```bash
-go install github.com/Leihb/octo-agent/cmd/octo@latest
 ```
 
 ## Quick start

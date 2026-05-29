@@ -17,18 +17,31 @@
 
 ## 安装
 
-正式 release 发布前先从源码构建：
+**预编译二进制（无需 Go 工具链）。** 从 [最新 release](https://github.com/Leihb/octo-agent/releases/latest)
+下载对应 OS/架构的压缩包，解压后把 `octo` 放进 `PATH`：
+
+```bash
+# macOS (Apple Silicon) 示例 —— 按你的平台替换文件名
+curl -sSL https://github.com/Leihb/octo-agent/releases/latest/download/octo_<version>_darwin_arm64.tar.gz | tar xz
+sudo mv octo /usr/local/bin/
+octo version
+```
+
+提供 linux / darwin / windows × amd64 + arm64 的压缩包；每个 release 附带的
+`checksums.txt` 可校验下载完整性。
+
+**用 Go 安装：**
+
+```bash
+go install github.com/Leihb/octo-agent/cmd/octo@latest
+```
+
+**从源码构建：**
 
 ```bash
 git clone https://github.com/Leihb/octo-agent.git
 cd octo-agent
 make build       # 产物 ./octo
-```
-
-或者直接 `go install`：
-
-```bash
-go install github.com/Leihb/octo-agent/cmd/octo@latest
 ```
 
 ## 快速上手
