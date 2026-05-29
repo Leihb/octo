@@ -43,4 +43,16 @@ type AgentEvent struct {
 
 	fmt.Println(tui.RenderEditCard(path, oldStr, newStr))
 	fmt.Println()
+
+	// Sample 2: an output-preview card (terminal/grep/read), capped.
+	fmt.Println(tui.RenderOutputCard("Run", "go test ./...",
+		"ok  github.com/x/a  0.21s\nok  github.com/x/b  0.10s\n--- FAIL: TestZ\n    z_test.go:9: boom\nFAIL\nexit status 1",
+		4, false))
+	fmt.Println()
+
+	// Sample 3: an error output card + an empty-output card.
+	fmt.Println(tui.RenderOutputCard("Run", "false", "command failed", 12, true))
+	fmt.Println()
+	fmt.Println(tui.RenderOutputCard("Read", "go.mod", "", 12, false))
+	fmt.Println()
 }

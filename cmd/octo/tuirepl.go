@@ -136,6 +136,11 @@ type tuiModel struct {
 	// (drives the "thinking…" placeholder).
 	streaming bool
 
+	// toolInput caches each tool call's input from EventToolStarted so the
+	// matching EventToolDone can render a card (tool_result events don't carry
+	// the input back). Keyed by ToolID; entry removed on done/error.
+	toolInput map[string]map[string]any
+
 	// queue holds Alt+Enter messages to run as future turns (design §8/§10).
 	queue []pendingItem
 
@@ -248,16 +253,53 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 	switch ev.Kind {
 	case agent.EventTextDelta:
 		return m.appendText(ev.Text)
+
 	case agent.EventToolStarted:
+		if m.toolInput == nil {
+			m.toolInput = map[string]map[string]any{}
+		}
+		m.toolInput[ev.ToolID] = ev.Input
+		// Card tools render their whole story in the done card — suppress the
+		// started line so it doesn't precede the card. (A live in-progress card
+		// with a spinner is a later phase; until then long card-tools show
+		// nothing until they finish.)
+		if m.rendersCard(ev.ToolName) {
+			return nil
+		}
 		return m.commitToolLine(fmt.Sprintf("↳ %s: %s", ev.ToolName, summariseInput(ev.Input)))
-	case agent.EventToolDone:
-		return m.commitToolLine(fmt.Sprintf("↳ %s ✓", ev.ToolName))
-	case agent.EventToolError:
-		return m.commitToolLine(toolErrStyle.Render(fmt.Sprintf("↳ %s ✗ — %s", ev.ToolName, truncate1Line(ev.Err))))
+
 	case agent.EventToolProgress:
+		// Card tools defer all output to the done card; dropping progress avoids
+		// noise above the card.
+		if m.rendersCard(ev.ToolName) {
+			return nil
+		}
 		return m.commitToolLine("│ " + ev.Chunk)
+
+	case agent.EventToolDone:
+		input := m.toolInput[ev.ToolID]
+		delete(m.toolInput, ev.ToolID)
+		if m.rendersCard(ev.ToolName) {
+			return m.commitToolLine(renderToolCard(ev.ToolName, input, ev.Output, false))
+		}
+		return m.commitToolLine(fmt.Sprintf("↳ %s ✓", ev.ToolName))
+
+	case agent.EventToolError:
+		input := m.toolInput[ev.ToolID]
+		delete(m.toolInput, ev.ToolID)
+		if m.rendersCard(ev.ToolName) {
+			return m.commitToolLine(renderToolCard(ev.ToolName, input, firstNonEmpty(ev.Output, ev.Err), true))
+		}
+		return m.commitToolLine(toolErrStyle.Render(fmt.Sprintf("↳ %s ✗ — %s", ev.ToolName, truncate1Line(ev.Err))))
 	}
 	return nil
+}
+
+// rendersCard reports whether the TUI should render this tool as a rich card.
+// --plain (cfg.plain) forces one-line status for every tool, matching the
+// plain/headless path; otherwise card tools (cardVerbFor) get a card.
+func (m *tuiModel) rendersCard(toolName string) bool {
+	return !m.cfg.plain && cardVerbFor(toolName) != ""
 }
 
 // appendText buffers a text delta, emitting any newline-terminated lines to

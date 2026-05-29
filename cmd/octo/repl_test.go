@@ -291,9 +291,10 @@ func TestTruncate1Line_CollapsesMultiline(t *testing.T) {
 	}
 }
 
-func TestREPLToolEventHandler_EditFileRendersCard(t *testing.T) {
-	// edit_file should produce a diff card on tool_done, NOT the terse
-	// ↳ status line, and the started event should be silent.
+func TestREPLToolEventHandler_EditFilePlainOneLiner(t *testing.T) {
+	// Cards are TUI-only now (design decision #8): the plain / non-TTY path
+	// renders edit_file as a terse ↳ status line like any other tool — no
+	// Update() diff card.
 	var buf bytes.Buffer
 	h := replToolEventHandler(&buf, false)
 	input := map[string]any{
@@ -305,17 +306,14 @@ func TestREPLToolEventHandler_EditFileRendersCard(t *testing.T) {
 	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "edit_file"})
 
 	out := buf.String()
-	if strings.Contains(out, "↳ edit_file:") {
-		t.Errorf("started ↳ line should be suppressed for edit_file in card mode:\n%s", out)
+	if !strings.Contains(out, "↳ edit_file:") {
+		t.Errorf("expected the started ↳ line for edit_file:\n%s", out)
 	}
-	if strings.Contains(out, "↳ edit_file ✓") {
-		t.Errorf("done ↳ line should be suppressed for edit_file in card mode:\n%s", out)
+	if !strings.Contains(out, "↳ edit_file ✓") {
+		t.Errorf("expected the done ↳ line for edit_file:\n%s", out)
 	}
-	if !strings.Contains(out, "Update(") {
-		t.Errorf("expected card header with Update(path):\n%s", out)
-	}
-	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta") {
-		t.Errorf("expected old_string and new_string in card body:\n%s", out)
+	if strings.Contains(out, "Update(") {
+		t.Errorf("plain path must NOT render a diff card (cards are TUI-only):\n%s", out)
 	}
 }
 
@@ -344,9 +342,9 @@ func TestREPLToolEventHandler_ToolProgressRendersBetweenStartedAndDone(t *testin
 	}
 }
 
-func TestREPLToolEventHandler_ProgressSuppressedForCardTools(t *testing.T) {
-	// edit_file renders a card on tool_done; intermediate progress should
-	// NOT print, otherwise we'd get random output above the card.
+func TestREPLToolEventHandler_PlainPathUniformNoCards(t *testing.T) {
+	// With cards now TUI-only, the plain path treats edit_file like any tool:
+	// progress chunks render with the │ prefix and there is no diff card.
 	var buf bytes.Buffer
 	h := replToolEventHandler(&buf, false)
 	input := map[string]any{
@@ -357,11 +355,11 @@ func TestREPLToolEventHandler_ProgressSuppressedForCardTools(t *testing.T) {
 	h(agent.AgentEvent{Kind: agent.EventToolDone, ToolID: "c1", ToolName: "edit_file"})
 
 	out := buf.String()
-	if strings.Contains(out, "│ noisy line") {
-		t.Errorf("progress should be suppressed for card-rendering tools:\n%s", out)
+	if !strings.Contains(out, "│ noisy line") {
+		t.Errorf("progress should render in the plain path (no card to defer to):\n%s", out)
 	}
-	if !strings.Contains(out, "Update(") {
-		t.Errorf("card should still render:\n%s", out)
+	if strings.Contains(out, "Update(") {
+		t.Errorf("plain path must NOT render a diff card:\n%s", out)
 	}
 }
 
