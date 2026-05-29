@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -39,6 +40,12 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 }
 
 func TestSave_FileMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows doesn't honor Unix permission bits — os.WriteFile(…, 0600)
+		// reports 0666 via Mode().Perm(). The 0600 intent still applies on the
+		// Unix platforms where it's a real access control.
+		t.Skip("Unix file permissions not enforced on Windows")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
