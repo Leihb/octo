@@ -220,8 +220,45 @@ func yamlScalar(s string) string {
 	return s
 }
 
-// List returns all entries (excluding the index/summary/lock), sorted by name.
+// List returns all entries (excluding the index/summary/lock), sorted by name,
+// under the store lock so a concurrent writer (another session mid-Save) can't
+// expose a half-written entry/index. Internal callers already holding the lock
+// must use listEntries instead — the lock is not reentrant.
 func (s *Store) List() ([]Entry, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return s.listEntries()
+}
+
+// Version returns a cheap content fingerprint of the entry index (MEMORY.md),
+// which Save rewrites on every change. It lets a long-running session detect
+// that another session has written memory without re-reading every entry each
+// turn: the hash only differs when the index changed. Read under the lock so a
+// concurrent Save can't yield a half-written index. "" means no memory yet.
+func (s *Store) Version() (string, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	b, err := os.ReadFile(filepath.Join(s.dir, indexFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return fmt.Sprintf("%016x", h.Sum64()), nil
+}
+
+// listEntries is List without locking — for callers that already hold the lock
+// (rebuildIndex, ArchiveAll, ArchiveCwd) and would otherwise self-deadlock.
+func (s *Store) listEntries() ([]Entry, error) {
 	ents, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -291,7 +328,7 @@ func (s *Store) readEntry(file string) (Entry, bool, error) {
 // rebuildIndex regenerates MEMORY.md from the on-disk entries (caller holds the
 // lock). One line per entry: "- name [type]: description".
 func (s *Store) rebuildIndex() error {
-	entries, err := s.List()
+	entries, err := s.listEntries() // already under lock (Save / Archive*)
 	if err != nil {
 		return err
 	}
@@ -603,7 +640,7 @@ func (s *Store) ArchiveAll() error {
 		return err
 	}
 	defer unlock()
-	entries, err := s.List()
+	entries, err := s.listEntries() // already under lock
 	if err != nil {
 		return err
 	}
@@ -772,7 +809,7 @@ func (s *Store) ArchiveCwd(cwd string) error {
 		return err
 	}
 	defer unlock()
-	entries, err := s.List()
+	entries, err := s.listEntries() // already under lock
 	if err != nil {
 		return err
 	}

@@ -36,6 +36,7 @@ type replConfig struct {
 	executor   agent.ToolExecutor
 	skillReg   *skills.Registry // discovered skills; backs /skills and /<name>
 	memStore   *memory.Store    // cross-session memory; backs /memory (nil → disabled)
+	memRefresh *memoryRefresher // live cross-session memory delta; nil → disabled
 	hooks      *hooks.Runner    // C9 Phase 3 pre/post-turn hooks; nil-safe via Configured()
 	// reader, when non-nil, is the line reader to use instead of building
 	// one fresh inside runREPL. Set by cmd/octo so the same instance is
