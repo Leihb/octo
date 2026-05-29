@@ -30,6 +30,19 @@ terminal:
   # steering the model to edit_file (defence in depth for permissive configs).
   - deny:  { pattern: "sed -i" }
   - deny:  { pattern: "sed --in-place" }
+  # Windows / PowerShell dangers. Matching is case-sensitive substring and
+  # PowerShell is case-insensitive with aliases, so these catch the canonical
+  # forms an LLM typically emits — anything missed still falls through to the
+  # implicit `ask` (prompt in interactive, deny in strict), never auto-run.
+  # (`rm -rf` above already covers the PowerShell `rm` alias.)
+  - deny:  { pattern: "Remove-Item -Recurse -Force" }
+  - deny:  { pattern: "Remove-Item -Force -Recurse" }
+  - deny:  { pattern: "Format-Volume" }
+  - ask:   { pattern: "Invoke-Expression" }        # arbitrary code (alias: iex)
+  - ask:   { pattern: "Invoke-WebRequest" }        # download / exfiltrate (alias: iwr)
+  - ask:   { pattern: "Invoke-RestMethod" }        # alias: irm
+  - ask:   { pattern: "Set-ExecutionPolicy" }
+  - ask:   { pattern: "Start-Process" }            # can launch arbitrary binaries
   # Sensitive-path access — must precede the safe-verb allows below, otherwise
   # `cat /etc/passwd` would match `allow: cat ` and slip through. Substring
   # matches are intentionally specific to avoid false positives.

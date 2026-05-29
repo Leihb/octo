@@ -17,14 +17,16 @@ import (
 // TerminalTimeout is the maximum time a single terminal command may run.
 const TerminalTimeout = 30 * time.Second
 
-// TerminalTool is an agent.ToolExecutor that runs shell commands via `sh -c`.
-// Stdout and stderr are combined and returned as the tool result. Non-zero
-// exit codes are reported as extra metadata in the result text rather than
-// as a tool error, so the LLM can see the failure output and adapt.
+// TerminalTool is an agent.ToolExecutor that runs shell commands through the
+// system shell (`sh -c` on macOS/Linux, PowerShell on Windows; see
+// shellCommand). Stdout and stderr are combined and returned as the tool
+// result. Non-zero exit codes are reported as extra metadata in the result
+// text rather than as a tool error, so the LLM can see the failure output and
+// adapt.
 //
 // The LLM-facing tool name is "terminal" — calling it "bash" would imply a
-// hard /bin/bash dependency, but the executor actually shells out via
-// `sh -c`.
+// hard /bin/bash dependency, but the executor shells out via the platform
+// shell (the model is told which one via the environment context).
 //
 // mgr, when non-nil, is the BackgroundManager used for background:true
 // launches; nil falls back to the process-wide default manager. The field
@@ -44,7 +46,7 @@ func (t TerminalTool) manager() *BackgroundManager {
 func (TerminalTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "terminal",
-		Description: "Run a shell command (via `sh -c`) and return stdout+stderr. Use for file operations, running programs, searching code, etc. Set background:true for long-running commands (servers, watchers): it returns immediately with a process id (no 30s timeout, non-blocking); read its output later with the terminal_output tool.",
+		Description: "Run a shell command in the system shell (POSIX sh on macOS/Linux, PowerShell on Windows — see the Shell line in the environment context) and return stdout+stderr. Use for file operations, running programs, searching code, etc. Set background:true for long-running commands (servers, watchers): it returns immediately with a process id (no 30s timeout, non-blocking); read its output later with the terminal_output tool.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

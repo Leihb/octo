@@ -31,6 +31,16 @@ func buildEnvContext(cwd string) string {
 	}
 	fmt.Fprintf(&b, "- Today's date: %s\n", time.Now().Format("2006-01-02"))
 	fmt.Fprintf(&b, "- OS/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		// The `terminal` tool runs commands through PowerShell here, not POSIX
+		// sh — steer the model away from emitting `ls`/`grep`/`rm -rf`/`&&`-on-
+		// cmd and toward PowerShell. The cross-platform built-in tools are the
+		// better default regardless.
+		b.WriteString("- Shell: PowerShell. Use PowerShell syntax and cmdlets " +
+			"(Get-ChildItem, Get-Content, Select-String, Remove-Item, $env:VAR), not POSIX sh. " +
+			"Chain commands with `;` rather than `&&` (Windows PowerShell 5.1 lacks `&&`). " +
+			"Prefer the built-in read_file / glob / grep tools over shelling out — they're identical across platforms.\n")
+	}
 	return b.String()
 }
 

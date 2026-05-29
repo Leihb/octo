@@ -61,9 +61,10 @@ func TestTerminalTool_Execute_Multiline(t *testing.T) {
 
 func TestTerminalTool_Execute_NonZeroExit(t *testing.T) {
 	// A failing command should return output + exit info as result text,
-	// NOT as a Go error, so the LLM can read it.
+	// NOT as a Go error, so the LLM can read it. `echo …; exit 1` is valid in
+	// both POSIX sh and PowerShell, so this stays platform-agnostic.
 	result, err := TerminalTool{}.Execute(context.Background(), "terminal", map[string]any{
-		"command": "sh -c 'echo oops; exit 1'",
+		"command": "echo oops; exit 1",
 	})
 	if err != nil {
 		t.Fatalf("Execute should not return a Go error for non-zero exit: %v", err)
