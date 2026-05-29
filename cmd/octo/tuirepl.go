@@ -79,9 +79,19 @@ type turnEndedMsg struct {
 type turnFinishedMsg struct{ err error } // the turn goroutine returned
 type noticeMsg struct{ text string }
 type bgExitMsg struct{ e tools.BgExit } // a background process finished (async)
+type tickMsg struct{}                   // animation tick while a turn runs
 type askMsg struct {
 	prompt UserPrompt
 	resp   chan UserResponse
+}
+
+// tickInterval drives the spinner / elapsed-clock animation. ~8 Hz is smooth
+// without being wasteful; it only runs while a turn is in flight.
+const tickInterval = 120 * time.Millisecond
+
+// tickCmd schedules the next animation tick.
+func tickCmd() tea.Cmd {
+	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 // tuiSink implements ViewSink by sending each call onto the bubbletea program.
@@ -156,6 +166,22 @@ type tuiModel struct {
 	cwd string
 	// turnStart timestamps the current turn so the status bar can show elapsed.
 	turnStart time.Time
+
+	// spinnerFrame advances on every tickMsg while a turn runs, animating the
+	// thinking placeholder, the running-tool indicator, and the elapsed clock.
+	spinnerFrame int
+	// running, when non-nil, is a card tool executing right now — shown as a
+	// live spinner line until its done event commits the finished card. (Card
+	// tools suppress their started line, so without this they'd show nothing
+	// until completion.)
+	running *runningTool
+}
+
+// runningTool is the live indicator state for an in-flight card tool.
+type runningTool struct {
+	verb   string
+	target string
+	start  time.Time
 }
 
 // modalState renders a permission / question prompt and collects the answer.
@@ -182,6 +208,8 @@ func (m *tuiModel) startTurn(line string) tea.Cmd {
 	m.turnRunning = true
 	m.streaming = false
 	m.turnStart = time.Now()
+	m.spinnerFrame = 0
+	m.running = nil
 	m.partial.Reset()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
@@ -196,11 +224,13 @@ func (m *tuiModel) startTurn(line string) tea.Cmd {
 	}()
 	// Echo the submitted message into the scrollback so it reads like a
 	// transcript — except a degraded background-notice "turn", which already
-	// surfaced as a bg notice and isn't user input.
-	if strings.HasPrefix(line, "<system-reminder>") {
-		return nil
+	// surfaced as a bg notice and isn't user input. Either way, start the
+	// animation ticker for the spinner + elapsed clock.
+	var echo tea.Cmd
+	if !strings.HasPrefix(line, "<system-reminder>") {
+		echo = tea.Println(promptStyle.Render("you> ") + line)
 	}
-	return tea.Println(promptStyle.Render("you> ") + line)
+	return tea.Batch(echo, tickCmd())
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -214,6 +244,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnStartedMsg:
 		return m, nil
+
+	case tickMsg:
+		// Keep animating only while a turn is in flight; let the ticker die
+		// once it ends so we're not redrawing an idle prompt forever.
+		if !m.turnRunning {
+			return m, nil
+		}
+		m.spinnerFrame++
+		return m, tickCmd()
 
 	case agentEventMsg:
 		return m, m.handleEvent(msg.ev)
@@ -267,11 +306,15 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 			m.toolInput = map[string]map[string]any{}
 		}
 		m.toolInput[ev.ToolID] = ev.Input
-		// Card tools render their whole story in the done card — suppress the
-		// started line so it doesn't precede the card. (A live in-progress card
-		// with a spinner is a later phase; until then long card-tools show
-		// nothing until they finish.)
+		// Card tools render their whole story in the done card; suppress the
+		// started line and instead show a live spinner indicator in the View
+		// region (animated by the ticker) until the done event commits the card.
 		if m.rendersCard(ev.ToolName) {
+			m.running = &runningTool{
+				verb:   cardVerbFor(ev.ToolName),
+				target: cardTargetFor(ev.ToolName, ev.Input),
+				start:  time.Now(),
+			}
 			return nil
 		}
 		return m.commitToolLine(fmt.Sprintf("↳ %s: %s", ev.ToolName, summariseInput(ev.Input)))
@@ -287,6 +330,7 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 	case agent.EventToolDone:
 		input := m.toolInput[ev.ToolID]
 		delete(m.toolInput, ev.ToolID)
+		m.running = nil // the finished card replaces the live indicator
 		if m.rendersCard(ev.ToolName) {
 			return m.commitToolLine(renderToolCard(ev.ToolName, input, ev.Output, false))
 		}
@@ -295,6 +339,7 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 	case agent.EventToolError:
 		input := m.toolInput[ev.ToolID]
 		delete(m.toolInput, ev.ToolID)
+		m.running = nil
 		if m.rendersCard(ev.ToolName) {
 			return m.commitToolLine(renderToolCard(ev.ToolName, input, firstNonEmpty(ev.Output, ev.Err), true))
 		}
@@ -344,6 +389,7 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 	m.turnRunning = false
 	m.cancelTurn = nil
 	m.streaming = false
+	m.running = nil // clear any live tool indicator (e.g. on interrupt)
 
 	// Auto-save (history is well-formed even after an interrupt).
 	if !m.cfg.noSave {
