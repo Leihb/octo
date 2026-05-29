@@ -11,6 +11,12 @@
 #   make fmt-check  fail if anything would be reformatted
 #   make tidy       go mod tidy
 #   make clean      remove build artefacts
+#
+# Multi-SWE-bench eval (manual; needs a model key + Docker + Python, NOT in CI):
+#   make eval-mswe-build                build the ./mswe-eval tool
+#   make eval-mswe-inspect DATASET=...  confirm the dataset schema
+#   make eval-mswe DATASET=...          generate patches with octo, then judge
+# See dev-docs/mswe-eval.md.
 
 GOTAGS ?=
 GOFLAGS ?=
@@ -29,7 +35,8 @@ COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -X github.com/Leihb/octo-agent/internal/version.Version=$(VERSION) \
            -X github.com/Leihb/octo-agent/internal/version.Commit=$(COMMIT)
 
-.PHONY: all build install test cover vet fmt fmt-check tidy clean
+.PHONY: all build install test cover vet fmt fmt-check tidy clean \
+        eval-mswe-build eval-mswe-inspect eval-mswe
 
 all: test
 
@@ -65,5 +72,20 @@ tidy:
 	go mod tidy
 
 clean:
-	rm -f octo octo.exe coverage.out coverage.html
+	rm -f octo octo.exe mswe-eval coverage.out coverage.html
 	rm -rf dist/
+
+# ── Multi-SWE-bench eval (manual; see dev-docs/mswe-eval.md) ────────────────
+# DATASET must point at a Go-filtered Multi-SWE-bench JSONL. LIMIT caps the
+# instance count. These call a real model and (for judging) Docker + Python —
+# never run them in CI.
+LIMIT  ?= 5
+
+eval-mswe-build:
+	go build $(GOFLAGS) -o mswe-eval ./cmd/mswe-eval
+
+eval-mswe-inspect: eval-mswe-build build
+	./mswe-eval inspect --dataset '$(DATASET)' --limit $(LIMIT)
+
+eval-mswe: eval-mswe-build build
+	./mswe-eval run --dataset '$(DATASET)' --limit $(LIMIT) --octo ./octo --out predictions.jsonl
