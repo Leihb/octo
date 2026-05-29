@@ -18,16 +18,17 @@ A+B 加固（#60–#65）之后，对标项基本落地完毕：
 | C6 | 压缩默认开 + 窗口相对阈值 | ✅ #75 |
 | C7 | append-only JSONL 持久化 | ✅ #70 |
 | C8 | 跨会话记忆 · 第一层（`~/.octo/octorules.md` + `@include`） | ✅ #79 |
-| C9 | 跨会话记忆 · 第二层（类型化记忆） | ✅ Phase 1 #93–#94, #96, #98–#102（设计 [`c9-memory-design.md`](c9-memory-design.md);Phase 2 daemon 待启动） |
+| C9 | 跨会话记忆 · 第二层（类型化记忆） | ✅ #93–#94, #96, #98–#102（设计 [`c9-memory-design.md`](c9-memory-design.md);边界提取 + `memoryd` daemon 已移除，记忆只走 `remember` + 启动整合） |
 | C10 | 优雅中断（Ctrl-C） | ✅ #77 |
 | C11 | OS 级命令沙箱 | ✅ Phase 1 #82（设计 #81）+ Phase 3 可配置 #84；Phase 2 主机白名单已放弃（见 `c11-sandbox-design.md` §8）|
 | C12 | 后台/并发命令执行（`terminal background` + `terminal_output`） | ✅ #76 |
 
 附带落地：provider 流式/缓存修复(#72)、DeepSeek reasoning_content(#73)、Anthropic extended thinking(#74)、`octo init` / `/init`(#80)。
 
-**剩余**：C9 Phase 2（常驻 daemon `octo memoryd`,设计完成,实现待启动）+ Phase 3
-（插件机制 + Hindsight）；M10 sub-agent tool 落地后 C9 的整合执行换成 sub-agent
-（plumbing 已就位:`Store.WorkspaceDiff` + `LastConsolidatedSHA`）。沙箱默认开**已决定
+**剩余**：C9 Phase 3（插件机制 + Hindsight）；C9 的整合执行已可走 sub-agent
+（plumbing 就位:`Store.WorkspaceDiff` + `LastConsolidatedSHA`）。边界提取与常驻
+daemon `octo memoryd` 已移除——记忆全靠 turn 内 `remember`（per-turn nudge 驱动）+
+启动时整合，不再后台重扫会话。沙箱默认开**已决定
 不做**（2026-05-27）—— 保持 opt-in，按需 `--sandbox`，理由见
 [`c11-sandbox-design.md`](c11-sandbox-design.md) §8。C11 网络故事 = `--sandbox-allow-net`
 的 on/off 开关,主机白名单经评估后放弃。
@@ -79,7 +80,7 @@ system prompt。
 |---|----|------|------|------|
 | C7 | append-only JSONL 持久化 | 两家 | 1.5d | 干掉每轮全量重写（O(n²)）：每条 entry 追加一行 + 后台 writer。顺带换 UUIDv7 会话 id。兼容旧 JSON。 |
 | C8 | 跨会话记忆 · 第一层 | 两家 | 1.5d | user 级记忆文件 + 层级加载（managed < user < project）+ `@include`。扩展 `internal/prompt`。 |
-| C9 | 跨会话记忆 · 第二层（靠后） | CC memdir / Codex memories | 3d+ | ✅ Phase 1 完成（PR #93–#102）：typed memory + `remember` 工具 + 边界提取 + incremental consolidate + git baseline + 三件套 per-rollout 产物。Phase 2 daemon + Phase 3 hook 插件待启动。详见 [`c9-memory-design.md`](c9-memory-design.md)。 |
+| C9 | 跨会话记忆 · 第二层（靠后） | CC memdir / Codex memories | 3d+ | ✅ 完成（PR #93–#102）：typed memory + `remember` 工具 + per-turn nudge + incremental consolidate + git baseline。边界提取 / per-rollout 产物 / `memoryd` daemon 已移除（记忆只走 turn 内 `remember`）。Phase 3 hook 插件待启动。详见 [`c9-memory-design.md`](c9-memory-design.md)。 |
 
 ### 阶段 4 — 健壮性（~1.5d）
 
@@ -107,7 +108,7 @@ system prompt。
 ## 与现有 roadmap 的关系
 
 - **C11 = M6.5 P1-2**（沙箱），把它正式纳入。
-- ~~**C9 与 M7（Skill 加载器）重叠**，建议合并规划。~~ M7 落地（#87），C9 Phase 1 独立落地（#93–#102），两者并行。Phase 2 daemon + Phase 3 hook 插件待 M10 sub-agent tool 之后启动。
+- ~~**C9 与 M7（Skill 加载器）重叠**，建议合并规划。~~ M7 落地（#87），C9 独立落地（#93–#102），两者并行。Phase 3 hook 插件待 M10 sub-agent tool 之后启动（边界提取与 `memoryd` daemon 已移除）。
 - 其余（C1–C8、C10）是正交的 parity 硬化项，可与 M7/M8 并行推进。
 
 ## 备注

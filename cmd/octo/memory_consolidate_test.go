@@ -110,7 +110,6 @@ func TestBuildConsolidationPrompt_ContentShape(t *testing.T) {
 	for _, want := range []string{
 		"cross-session memory",
 		"/tmp/mem/memory_summary.md",
-		"/tmp/mem/rollout_summaries",
 		"PRIOR",
 		"NEW",
 		"read_file",

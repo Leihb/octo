@@ -306,18 +306,11 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// Boundary memory (REPL only): extract durable facts from the previous
-	// session and consolidate if due, BEFORE rendering this session's injection
-	// so freshly captured facts apply immediately rather than a session later.
-	// Skips the session being resumed. Best-effort — errors don't block startup.
-	//
-	// C9 Phase 2 coordination: if the memory daemon is alive, IT owns the
-	// extract + consolidate cadence — chat startup skips this hot-path work
-	// so the user sees an instant prompt. The daemon will catch up the just-
-	// ended previous session ~15 min later (the idle threshold), so the next
-	// fresh chat session inherits its memory naturally.
-	if isREPL && memStore != nil && !memorydAlive() {
-		maybeProcessMemory(a, memStore, stdout, resumeID)
+	// Boundary memory (REPL only): consolidate the live-captured entries into
+	// the summary if due, BEFORE rendering this session's injection so freshly
+	// folded facts apply immediately. Best-effort — errors don't block startup.
+	if isREPL && memStore != nil {
+		maybeProcessMemory(a, memStore)
 	}
 	var memInjection string
 	if memStore != nil {

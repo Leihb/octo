@@ -61,8 +61,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runMemory(args[1:], stdout, stderr)
 	case "task":
 		return runTask(args[1:], stdin, stdout, stderr)
-	case "memoryd":
-		return runMemoryd(args[1:], stdin, stdout, stderr)
 	case "completion":
 		return runCompletion(args[1:], stdout, stderr)
 	case "__complete":
@@ -86,7 +84,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  init       Analyze the repo and generate/update .octorules")
 	fmt.Fprintln(w, "  memory     Manage cross-session memory (e.g. `octo memory list`)")
 	fmt.Fprintln(w, "  task       Autonomous task orchestration (M11; `octo task start \"<goal>\"`)")
-	fmt.Fprintln(w, "  memoryd    C9 Phase 2 memory daemon (`octo memoryd start|stop|status`)")
 	fmt.Fprintln(w, "  completion Print shell-completion snippet (bash | zsh | fish)")
 	fmt.Fprintln(w, "  version    Print the version and exit")
 	fmt.Fprintln(w, "  help       Print this help and exit")

@@ -1,5 +1,18 @@
 # C9 — 跨会话记忆（typed auto-memory）design
 
+> ⚠️ **部分已废弃（2026-05-29）。** 本文记录的**边界提取（boundary extraction）**、
+> **per-rollout summaries**、以及 **Phase 2 常驻 daemon `octo memoryd`** 已全部移除。
+> 原因：边界提取会把整个上一会话的 history 再喂给**主模型**重挖一遍，与 turn 内
+> `remember`（由 per-turn memory nudge 驱动，见 #132）的即时捕获**大量重复**，纯属
+> token 浪费；既然 live 捕获已可靠，后台重扫不再有价值，daemon（其主要职责就是异步
+> 提取）随之退休。
+>
+> **现状架构**：记忆只有两步——(1) turn 内 `remember` 工具捕获（nudge 提醒模型扫描
+> durable 信号）；(2) 启动时 `consolidateIfDue` 把累积的活跃条目折叠进
+> `memory_summary.md`（≥5 条 + ≥24h）。无后台进程、无会话重扫、无 rollout 叙事文档。
+> 下文凡涉及"提取 / extraction / daemon / memoryd / rollout_summaries / Phase 2"的段落
+> 均为**历史设计记录**，保留以存"当初为何这么设计"的来龙去脉；各相关章节另有就地标注。
+>
 > 路线图源：`competitive-parity-roadmap.md` C9（"跨会话记忆 · 第二层，类型化记忆"，原与 M7
 > 合并规划；M7 已落地 #87，本文是 C9 单独成案）。
 >
@@ -58,6 +71,10 @@ summary，**不**随对话中途新增的记忆刷新（那会让缓存失效）
 
 ## 3. 存储模型（typed，一事一文件 + 注册表 + 注入摘要 + per-rollout 引用）
 
+> 〔已移除 2026-05-29〕`rollout_summaries/` 及 per-rollout 引用文档已删除——它们只由
+> 边界提取产出，提取移除后失去生产者。现存储只剩 `<slug>.md` + `MEMORY.md` +
+> `memory_summary.md`。
+
 `~/.octo/memory/` —— **自身是 git repo**（PR #101 起，对标 Codex）：
 
 ```
@@ -103,6 +120,11 @@ last_verified: <YYYY-MM-DD>
   非破坏迁移。
 
 ## 4. Write — 即时 `remember` 工具 + 边界提取
+
+> 〔已移除 2026-05-29〕**边界提取整条路径已删除**（`ExtractMemory`、
+> `extractPreviousSession`、启动 fallback、三件套产出）。写入只剩即时 `remember`
+> 工具，由 per-turn memory nudge（#132）驱动模型在 turn 内捕获。下文"边界提取 / daemon
+> 离线 / `.state.last_extracted_session`"等均为历史设计。
 
 写入有两个来源（对标 Claude Code：主模型内联即时写 + 事后整合补全）：
 
@@ -152,6 +174,10 @@ prompt，token 计入会话预算。
 
 ## 5. Manage — 整合（daemon idle / 启动时按需）+ sub-agent + git baseline
 
+> 〔部分已移除 2026-05-29〕整合（consolidation）本身**保留**：仍由 `consolidateIfDue`
+> 在 `octo chat` 启动时触发（≥5 条 + ≥24h），sub-agent + git baseline 路径不变。删除的
+> 只是 **daemon idle 触发那一路**——`memoryd` 退休后整合只在启动时跑。
+
 随会话累积，`<slug>.md` 会重复/过时。整合是另一次 LLM 调用,读 MEMORY.md + 相关条目，
 做合并去重、淘汰过期、刷新 `memory_summary.md`，然后**删除已整合的 entry**（git
 history 保留）。
@@ -187,6 +213,9 @@ history 保留）。
 
 ## 6. Read — 注入（summary 进冻结 prefix）+ 按需 rollout_summaries
 
+> 〔部分已移除 2026-05-29〕summary 注入**保留**。"按需 rollout_summaries"那部分已废弃
+> ——rollout 文档不再产出，base.md 里相应的 on-demand reference 引导也应随之失效。
+
 `prompt.Compose` 新增 memory 层，注入 `memory_summary.md` 的内容（剥掉首行 v1 标记）。
 
 - 层位置（skills 之后、用户身份/规则之前——记忆是"跨会话用户上下文"，让用户显式
@@ -213,6 +242,10 @@ history 保留）。
   产物下次会话才生效。
 
 ## 7. Phase 2 — 常驻 memory daemon
+
+> 〔整章已移除 2026-05-29〕`octo memoryd` 守护进程**已删除**（命令、`memoryd_work`、
+> `internal/memoryd` 包、PID/launchd 全部移除）。daemon 的主要职责是异步边界提取；提取
+> 取消后它失去存在理由，整合改为仅在 `octo chat` 启动时跑。本章全文仅作历史设计记录。
 
 `octo memoryd`：长期运行的守护进程，接管异步提取（§4）与整合（§5）；离线时一切退回
 Phase 1 的启动时路径，记忆功能不丢。

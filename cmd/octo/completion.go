@@ -84,14 +84,12 @@ func completionCandidates(words []string) []string {
 		return taskCandidates(words, prev)
 	case "memory":
 		return memoryCandidates(words)
-	case "memoryd":
-		return memorydCandidates(words)
 	case "init":
 		return initCandidates(prev)
 	case "help":
 		// `octo help <TAB>` → list of help targets.
 		if len(words) == 3 {
-			return []string{"chat", "task", "memory", "init", "memoryd", "completion", "mcp"}
+			return []string{"chat", "task", "memory", "init", "completion", "mcp"}
 		}
 	case "completion":
 		if len(words) == 3 {
@@ -166,13 +164,6 @@ func memoryCandidates(words []string) []string {
 	return nil
 }
 
-func memorydCandidates(words []string) []string {
-	if len(words) == 3 {
-		return []string{"start", "stop", "status", "help"}
-	}
-	return nil
-}
-
 func initCandidates(prev string) []string {
 	switch prev {
 	case "--provider":
@@ -230,8 +221,8 @@ Examples:
   octo completion fish > ~/.config/fish/completions/octo.fish
 
 What it completes:
-  - Top-level subcommands (chat, task, memory, init, memoryd, …).
-  - Subcommands of task / memory / memoryd / help / completion.
+  - Top-level subcommands (chat, task, memory, init, …).
+  - Subcommands of task / memory / help / completion.
   - Session IDs after "octo chat -c " — full + short + "last".
   - Task IDs after "octo task status|show|resume|cancel|run " — full + short + "last".
   - Fixed values for --provider (anthropic|openai) and --permission-mode
@@ -246,7 +237,7 @@ new flags / subcommands are added.`))
 // ── Static lists ─────────────────────────────────────────────────────────
 
 var topLevelCommands = []string{
-	"chat", "init", "memory", "task", "memoryd",
+	"chat", "init", "memory", "task",
 	"version", "help", "completion",
 }
 

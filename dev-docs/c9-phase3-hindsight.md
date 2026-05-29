@@ -172,15 +172,14 @@ server；代价是 MCP client 本身是更大的独立工作。
 
 ## 8. 不做（boundary）
 
-- **Hindsight 不进 typed memory 的写入路径**。`remember` 工具、boundary
-  extraction、`memoryd` 处理的是 octo 自己的 typed memory（feedback /
-  user / project / reference 四类，进 system prompt 注入）。Hindsight
-  处理的是**全文检索 / 语义召回**的 turn-level context。两者目的不同，
-  存储不同，调用时机不同。
+- **Hindsight 不进 typed memory 的写入路径**。`remember` 工具处理的是
+  octo 自己的 typed memory（feedback / user / project / reference 四类，
+  进 system prompt 注入）。Hindsight 处理的是**全文检索 / 语义召回**的
+  turn-level context。两者目的不同，存储不同，调用时机不同。
 - **Hindsight 失败不影响 typed memory**。即使 hook 超时 / 失败，
   `remember` 还在工作，下次 session 启动还会 inject summary。
-- **不替换 Phase 1/2**。Phase 3 是叠加层。`OCTO_HOOK_PRE_TURN` 不设
-  → 走纯原生路径。
+- **不替换原生路径**。Phase 3 是叠加层。`OCTO_HOOK_PRE_TURN` 不设
+  → 走纯原生路径（`remember` + 启动整合）。
 
 ## 9. Roadmap
 

@@ -31,7 +31,7 @@ func TestCompletionCandidates_TopLevel(t *testing.T) {
 	}
 	for _, words := range cases {
 		got := completionCandidates(words)
-		if !containsAll(got, []string{"chat", "task", "memory", "init", "memoryd", "help", "completion"}) {
+		if !containsAll(got, []string{"chat", "task", "memory", "init", "help", "completion"}) {
 			t.Errorf("words=%v missing top-level commands; got %v", words, got)
 		}
 	}
@@ -108,7 +108,7 @@ func TestCompletionCandidates_TaskIDsAfterVerbs(t *testing.T) {
 
 func TestCompletionCandidates_HelpTargets(t *testing.T) {
 	got := completionCandidates([]string{"octo", "help", ""})
-	want := []string{"chat", "task", "memory", "init", "memoryd", "completion", "mcp"}
+	want := []string{"chat", "task", "memory", "init", "completion", "mcp"}
 	if !sliceEq(got, want) {
 		t.Errorf("help target completion = %v, want %v", got, want)
 	}
@@ -118,15 +118,6 @@ func TestCompletionCandidates_CompletionShells(t *testing.T) {
 	got := completionCandidates([]string{"octo", "completion", ""})
 	if !sliceEq(got, []string{"bash", "zsh", "fish"}) {
 		t.Errorf("completion shell list = %v", got)
-	}
-}
-
-func TestCompletionCandidates_MemorydSubcommands(t *testing.T) {
-	got := completionCandidates([]string{"octo", "memoryd", ""})
-	for _, want := range []string{"start", "stop", "status"} {
-		if !sliceContains(got, want) {
-			t.Errorf("memoryd subcommand %q missing; got %v", want, got)
-		}
 	}
 }
 

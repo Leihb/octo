@@ -20,8 +20,6 @@ func printCommandHelp(name string, w io.Writer) bool {
 		memoryHelp(w)
 	case "init":
 		initHelp(w)
-	case "memoryd":
-		memorydHelp(w)
 	case "completion":
 		completionHelp(w)
 	case "mcp":
@@ -172,9 +170,9 @@ Layout:
   ~/.octo/memory/active/<slug>.md    One file per unconsolidated fact
   ~/.octo/memory/summary.md          The injected summary (loaded into every system prompt)
 
-Memory is built up by the in-session 'remember' tool and consolidated either
-at chat startup or by the long-running daemon (see "octo help memoryd"). To
-disable memory injection for a single session, run "octo chat --no-memory".`)
+Memory is built up by the in-session 'remember' tool and consolidated at chat
+startup once enough entries accumulate. To disable memory injection for a
+single session, run "octo chat --no-memory".`)
 }
 
 func initHelp(w io.Writer) {
@@ -196,33 +194,4 @@ Common flags:
 
 Environment:
   ANTHROPIC_API_KEY / OPENAI_API_KEY    Required for the chosen provider.`)
-}
-
-func memorydHelp(w io.Writer) {
-	fmt.Fprintln(w, `octo memoryd — long-lived foreground daemon that takes over the boundary
-extraction + consolidation passes the chat path otherwise runs at startup.
-With the daemon alive, "octo chat" startup is effectively instant — the
-extract/consolidate cost moves out of the user's critical path.
-
-Examples:
-  octo memoryd start                 Start the daemon (refuses if one's already running)
-  octo memoryd status                Show PID, uptime, last-extracted session
-  octo memoryd stop                  SIGTERM the daemon; waits for a clean shutdown
-
-Tick + idle window:
-  - Every 15s (default) the daemon scans recent sessions.
-  - A session is extracted when its file mtime is older than 15 minutes
-    (idle window) — guarantees we never race a still-active chat.
-  - One session per tick by design — SIGTERM stops between extractions.
-
-Environment:
-  OCTO_MEMORYD_PROVIDER    Provider override (anthropic | openai). When unset
-                           the daemon picks the first one with a key present.
-  ANTHROPIC_API_KEY / OPENAI_API_KEY    Required (one of them) to start.
-
-PID file:
-  ~/.octo/memoryd.pid                Created at start, removed on clean shutdown.
-
-Not supported on Windows. The chat path detects the daemon via the PID file
-and skips its in-process memory pass when the daemon is alive.`)
 }
