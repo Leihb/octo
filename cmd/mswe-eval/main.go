@@ -17,15 +17,70 @@
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/Leihb/octo-agent/internal/mswe"
 )
+
+// judgeDockerfile builds the Linux image the harness runs in under --docker
+// mode (it can't import on a case-insensitive macOS/Windows filesystem).
+//
+//go:embed Dockerfile.judge
+var judgeDockerfile string
+
+const judgeImage = "octo-mswe-judge"
+
+// ensureJudgeImage builds judgeImage from the embedded Dockerfile if it isn't
+// already present locally.
+func ensureJudgeImage() error {
+	if err := exec.Command("docker", "image", "inspect", judgeImage).Run(); err == nil {
+		return nil
+	}
+	fmt.Printf("building judge image %s (one-time)…\n", judgeImage)
+	cmd := exec.Command("docker", "build", "-t", judgeImage, "-")
+	cmd.Stdin = strings.NewReader(judgeDockerfile)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("build judge image: %w", err)
+	}
+	return nil
+}
+
+// resolve returns p as an absolute, symlink-resolved path (best effort), so
+// host paths and in-container bind-mount paths line up byte-for-byte.
+func resolve(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = p
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// uniqueDirs returns the distinct non-empty entries (host dirs to bind-mount at
+// identical paths in the judge container, so paths the harness hands to the
+// host Docker daemon resolve correctly).
+func uniqueDirs(paths ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -242,7 +297,8 @@ func runJudge(args []string) error {
 	dataset := fs.String("dataset", "", "path to the Multi-SWE-bench JSONL dataset")
 	predictions := fs.String("predictions", "predictions.jsonl", "predictions JSONL from `generate`")
 	workdir := fs.String("workdir", filepath.Join(os.TempDir(), "mswe-eval"), "scratch dir for the harness")
-	python := fs.String("python", "python3", "python interpreter with multi_swe_bench installed")
+	python := fs.String("python", "python3", "python interpreter with multi_swe_bench installed (native mode)")
+	dockerMode := fs.Bool("docker", runtime.GOOS != "linux", "run the harness in a Linux container via the host Docker daemon — required on macOS/Windows, where the harness can't import")
 	// generate-only flags tolerated so `run` can share one flag set.
 	_ = fs.String("octo", "", "")
 	_ = fs.String("out", "", "")
@@ -256,14 +312,24 @@ func runJudge(args []string) error {
 	if *dataset == "" {
 		return fmt.Errorf("judge: --dataset is required")
 	}
-	outputDir := filepath.Join(*workdir, "judge-out")
+	if err := os.MkdirAll(*workdir, 0o755); err != nil {
+		return err
+	}
+	// Resolve symlinks on every path the config + Docker mounts reference, so a
+	// container's same-path bind mount agrees with the host (macOS /tmp →
+	// /private/tmp would otherwise make the harness fail to find its config).
+	wd := resolve(*workdir)
+	outputDir := filepath.Join(wd, "judge-out")
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return err
 	}
-
-	datasetAbs, _ := filepath.Abs(*dataset)
-	predAbs, _ := filepath.Abs(*predictions)
-	cfg := mswe.NewHarnessConfig(*workdir, datasetAbs, predAbs, outputDir)
+	// The harness validates that repo_dir already exists (it clones into it).
+	if err := os.MkdirAll(filepath.Join(wd, "repos"), 0o755); err != nil {
+		return err
+	}
+	datasetAbs := resolve(*dataset)
+	predAbs := resolve(*predictions)
+	cfg := mswe.NewHarnessConfig(wd, datasetAbs, predAbs, outputDir)
 	cfgPath := filepath.Join(outputDir, "config.json")
 	cf, err := os.Create(cfgPath)
 	if err != nil {
@@ -275,12 +341,31 @@ func runJudge(args []string) error {
 	}
 	cf.Close()
 
-	fmt.Printf("running judge: %s -m multi_swe_bench.harness.run_evaluation --config %s\n", *python, cfgPath)
-	cmd := exec.Command(*python, "-m", "multi_swe_bench.harness.run_evaluation", "--config", cfgPath)
+	var cmd *exec.Cmd
+	if *dockerMode {
+		if err := ensureJudgeImage(); err != nil {
+			return err
+		}
+		// Mount the host Docker socket (so the harness drives the host daemon to
+		// build/run per-instance containers) and every host dir the config
+		// references AT THE SAME PATH, so the paths the harness passes to
+		// `docker run -v` resolve identically on the host.
+		dargs := []string{"run", "--rm", "-v", "/var/run/docker.sock:/var/run/docker.sock"}
+		for _, d := range uniqueDirs(wd, filepath.Dir(datasetAbs), filepath.Dir(predAbs)) {
+			dargs = append(dargs, "-v", d+":"+d)
+		}
+		dargs = append(dargs, "-w", wd, judgeImage,
+			"python", "-m", "multi_swe_bench.harness.run_evaluation", "--config", cfgPath)
+		fmt.Printf("running judge in container %s (host daemon via socket)\n", judgeImage)
+		cmd = exec.Command("docker", dargs...)
+	} else {
+		fmt.Printf("running judge: %s -m multi_swe_bench.harness.run_evaluation --config %s\n", *python, cfgPath)
+		cmd = exec.Command(*python, "-m", "multi_swe_bench.harness.run_evaluation", "--config", cfgPath)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run_evaluation: %w (is multi_swe_bench installed + Docker running?)", err)
+		return fmt.Errorf("run_evaluation: %w (Docker running? on macOS/Windows use --docker)", err)
 	}
 
 	reportPath, err := findReport(outputDir)
