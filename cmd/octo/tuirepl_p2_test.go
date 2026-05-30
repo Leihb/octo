@@ -23,23 +23,25 @@ func TestRenderStatusBar_ShowsModelAndHint(t *testing.T) {
 	}
 }
 
-func TestRenderInputBox_BorderGating(t *testing.T) {
+func TestRenderInputBox_FlatStyle(t *testing.T) {
 	m := newTestModel()
 	setInput(m, "hi")
 
-	// Width 0 (pre-WindowSizeMsg): borderless, just the content.
+	// Flat style: no border chars at any width, just prompt + input.
 	m.width = 0
 	if got := m.renderInputBox(); strings.ContainsAny(got, "╭╮╰╯") {
 		t.Errorf("no border expected at width 0; got:\n%s", got)
 	}
-	if !strings.Contains(m.renderInputBox(), "❯ ") {
+	if !strings.Contains(m.renderInputBox(), "> ") {
 		t.Error("input box should always show the prompt")
 	}
 
-	// A real width draws the rounded border.
 	m.width = 60
-	if got := m.renderInputBox(); !strings.ContainsAny(got, "╭╮╰╯") {
-		t.Errorf("expected a rounded border at width 60; got:\n%s", got)
+	if got := m.renderInputBox(); strings.ContainsAny(got, "╭╮╰╯") {
+		t.Errorf("flat style should never draw a border; got:\n%s", got)
+	}
+	if !strings.Contains(m.renderInputBox(), "> ") {
+		t.Error("input box should always show the prompt")
 	}
 }
 

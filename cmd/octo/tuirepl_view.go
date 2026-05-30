@@ -23,11 +23,6 @@ var (
 	queueStyle    = lipgloss.NewStyle().Foreground(tui.ColAccent)
 	modalStyle    = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
 	hintStyle     = lipgloss.NewStyle().Foreground(tui.ColDimmer).Italic(true)
-	statusStyle   = lipgloss.NewStyle().Foreground(tui.ColMuted)
-	inputBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(tui.ColBorder).
-			Padding(0, 1)
 	userEchoStyle = lipgloss.NewStyle().Foreground(tui.ColUserMsg).Bold(true)
 )
 
@@ -394,7 +389,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Bordered input box + status bar.
+	// Flat input line (no border) + separator + status bar.
 	b.WriteString(m.renderInputBox())
 	b.WriteByte('\n')
 	b.WriteString(m.renderStatusBar())
@@ -418,22 +413,17 @@ func (m *tuiModel) spinnerLine(label string, since time.Time) string {
 	return hintStyle.Render(fmt.Sprintf("%c %s (%s)", frame, label, time.Since(since).Round(time.Second)))
 }
 
-// renderInputBox draws the prompt + current input inside a rounded border,
-// sized to the terminal width. Falls back to a borderless line before the
-// first WindowSizeMsg (width 0) or on a very narrow terminal.
+// renderInputBox draws the prompt + current input as a flat line (Claude Code
+// style). No border — just the prompt prefix and the textinput content.
 func (m *tuiModel) renderInputBox() string {
-	content := promptStyle.Render("❯ ") + m.ti.View()
-	if m.width <= 6 {
-		return content
-	}
-	return inputBoxStyle.Width(m.width - 4).Render(content) // -2 border, -2 padding
+	return promptStyle.Render("> ") + m.ti.View()
 }
 
 // renderStatusBar renders the model / cwd / context% / cost / permission /
-// elapsed segments, with the contextual key hint on a dim line below.
+// elapsed segments, with a separator line above and the contextual key hint
+// below (Claude Code style).
 func (m *tuiModel) renderStatusBar() string {
 	var segs [][2]string
-	segs = append(segs, [2]string{"model", m.a.Model})
 	if m.cwd != "" {
 		segs = append(segs, [2]string{"cwd", m.cwd})
 	}

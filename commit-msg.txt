@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 tui: polish visual design with banner, styled prompt, and status bar
 
 - Add welcome banner (◆ octo chat) shown on startup, dismissed on first input
@@ -10,3 +11,15 @@ tui: polish visual design with banner, styled prompt, and status bar
   - elapsed: muted
 - Add new brand colours to theme: ColBrand, ColBrandDim, ColUserMsg, ColAssistant
 - Add Banner() and StatusBar() helpers to internal/tui with tests
+=======
+tui: refine to Claude Code style — flat input, separator lines, strict alignment
+
+- Remove rounded border from input box; flat "> " prompt like Claude Code
+- Add horizontal separator line (─) above status bar
+- Add welcome banner (◆ octo chat) with model/cwd info, dismissed on first input
+- Add input placeholder "Ask anything…"
+- Style user message echoes with blue tint (ColUserMsg)
+- Status bar with styled segments: model=muted purple, cost=green, elapsed=grey
+- Add Banner() and StatusBar() helpers to internal/tui with tests
+- All colours use adaptive palette for light/dark terminal support
+>>>>>>> b4acbec (tui: refine to Claude Code style — flat input, separator lines, strict alignment)

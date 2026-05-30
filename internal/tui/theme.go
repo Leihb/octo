@@ -17,16 +17,11 @@ var (
 	ColDimmer = lipgloss.AdaptiveColor{Light: "#AFB8C1", Dark: "#484F58"} // dimmest (unchanged line nos)
 	ColBorder = lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"} // panel / input-box border
 
-	// Brand colours for the TUI chrome (banner, prompt, status bar).
-	ColBrand     = lipgloss.AdaptiveColor{Light: "#6F42C1", Dark: "#A371F7"} // purple — octo brand
-	ColBrandDim  = lipgloss.AdaptiveColor{Light: "#B4A7D6", Dark: "#6E5494"} // muted purple
-	ColUserMsg   = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"} // blue — user messages
-	ColAssistant = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"} // green — assistant
+	ColBrand    = lipgloss.AdaptiveColor{Light: "#6F42C1", Dark: "#A371F7"} // purple — octo brand
+	ColBrandDim = lipgloss.AdaptiveColor{Light: "#B4A7D6", Dark: "#6E5494"} // muted purple
+	ColUserMsg  = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#58A6FF"} // blue — user messages
 )
 
-// IsDark reports whether the terminal has a dark background. The raw-ANSI diff
-// row washes and the Chroma style can't go through lipgloss.AdaptiveColor, so
-// they pick light/dark via this. Cached by lipgloss after the first probe.
 func IsDark() bool { return lipgloss.HasDarkBackground() }
 
 var (
