@@ -36,7 +36,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlD:
 		m.quit = true
-		return m, tea.Quit
+		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
 
 	case tea.KeyCtrlC:
 		if m.turnRunning {
@@ -44,7 +44,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.quit = true
-		return m, tea.Quit
+		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
 
 	case tea.KeyEsc:
 		if m.turnRunning {
@@ -63,7 +63,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if n := len(m.queue); n > 0 {
 			dropped := m.queue[n-1].text
 			m.queue = m.queue[:n-1]
-			return m, tea.Println(queueStyle.Render("✕ unqueued: " + dropped))
+			m.pushScrollback(queueStyle.Render("✕ unqueued: " + dropped))
 		}
 		return m, nil
 
@@ -80,7 +80,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				next = permission.ModeInteractive
 			}
 			m.cfg.permEngine.SetMode(next)
-			return m, tea.Println(noticeStyle.Render("Permission mode: " + string(next)))
+			m.pushScrollback(noticeStyle.Render("Permission mode: " + string(next)))
 		}
 		return m, nil
 
@@ -140,7 +140,8 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 	if alt {
 		// Queue: run as a future turn.
 		m.queue = append(m.queue, pendingItem{text: text})
-		return m, tea.Println(queueStyle.Render("＋ queued: " + text))
+		m.pushScrollback(queueStyle.Render("＋ queued: " + text))
+		return m, nil
 	}
 	// Steer: fold into the running turn at the next tool-batch boundary.
 	// No immediate UI echo — the steer text is displayed later via
@@ -160,7 +161,8 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 	// /init: generate .octorules as a normal tool-enabled turn.
 	if text == "/init" {
 		if len(cfg.tools) == 0 || cfg.executor == nil {
-			return m, tea.Println(noticeStyle.Render("/init needs tools — restart with: octo chat --tools"))
+			m.pushScrollback(noticeStyle.Render("/init needs tools — restart with: octo chat --tools"))
+			return m, nil
 		}
 		return m, m.startTurnEcho(initInstruction, "/init")
 	}
@@ -179,7 +181,7 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/exit", "/quit":
 		m.quit = true
-		return m, tea.Quit
+		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
 	case "/goal":
 		return m.dispatchGoal(strings.TrimSpace(strings.TrimPrefix(text, first)))
 	case "/help", "/save", "/sessions", "/skills", "/memory", "/mcp":
@@ -202,7 +204,8 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 		case "/mcp":
 			printMCP(&b)
 		}
-		return m, tea.Println(strings.TrimRight(b.String(), "\n"))
+		m.pushScrollback(strings.TrimRight(b.String(), "\n"))
+		return m, nil
 	default:
 		// Not a recognised command — treat it as ordinary user text so
 		// paths, regexes, and other /-prefixed messages reach the model.
@@ -330,6 +333,41 @@ func keyIs(msg tea.KeyMsg, r rune) bool {
 
 // ── View ──
 
+// ccHeader renders the Claude Code-style top header: model · cwd.
+func (m *tuiModel) ccHeader() string {
+	var parts []string
+	if m.a.Model != "" {
+		parts = append(parts, m.a.Model)
+	}
+	if m.cwd != "" {
+		parts = append(parts, m.cwd)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return noticeStyle.Render(strings.Join(parts, " · "))
+}
+
+// liveHeight returns the number of lines the "live" region (partial text,
+// spinner, queue, background, input box, status bar) occupies.
+func (m *tuiModel) liveHeight() int {
+	h := 0
+	if m.partial.String() != "" {
+		h++
+	}
+	if m.running != nil || (m.turnRunning && !m.streaming) {
+		h++
+	}
+	if len(m.queue) > 0 {
+		h += 3 // panel title + border
+	}
+	if bg := tools.RunningBackground(); len(bg) > 0 {
+		h += 2 + len(bg) // panel with lines
+	}
+	h += 2 // input box + status bar
+	return h
+}
+
 func (m *tuiModel) View() string {
 	if m.quit {
 		return ""
@@ -340,19 +378,36 @@ func (m *tuiModel) View() string {
 
 	var b strings.Builder
 
-	// Banner always renders at the top of the fixed viewport; scrollback
-	// content naturally pushes it upward rather than abruptly hiding it.
-	b.WriteString(tui.Banner("", m.a.Model, m.cwd, m.width))
-	b.WriteByte('\n')
+	// ── Header ──
+	if h := m.ccHeader(); h != "" {
+		b.WriteString(h)
+		b.WriteByte('\n')
+	}
 
-	// Live partial assistant line (committed lines already scrolled up).
-	// Render through glamour so wrapping stays consistent with committed blocks.
+	// ── Scrollback (message history) ──
+	// Calculate how many lines we can show between header and live region.
+	liveH := m.liveHeight()
+	headerH := 1                                // ccHeader is 1 line
+	available := m.height - headerH - liveH - 1 // -1 for safety margin
+	if available < 0 {
+		available = 0
+	}
+	start := 0
+	if len(m.scrollback) > available {
+		start = len(m.scrollback) - available
+	}
+	for i := start; i < len(m.scrollback); i++ {
+		b.WriteString(m.scrollback[i])
+		b.WriteByte('\n')
+	}
+
+	// ── Live partial assistant text ──
 	if p := m.partial.String(); p != "" {
 		b.WriteString(m.md.render(p, m.width))
 		b.WriteByte('\n')
 	}
-	// Animated activity indicator: a running card-tool, else the "thinking"
-	// placeholder during the initial wait. Both tick via spinnerFrame.
+
+	// ── Activity indicator ──
 	if m.running != nil {
 		b.WriteString(m.spinnerLine(m.running.verb+"("+m.running.target+")", m.running.start))
 		b.WriteByte('\n')
@@ -361,7 +416,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Queue panel (bordered).
+	// ── Queue panel ──
 	if len(m.queue) > 0 {
 		var items strings.Builder
 		for i, q := range m.queue {
@@ -374,8 +429,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Background-processes panel (bordered): the still-running `terminal
-	// background:true` commands, animated by the ticker.
+	// ── Background processes panel ──
 	if bg := tools.RunningBackground(); len(bg) > 0 {
 		frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 		var lines strings.Builder
@@ -389,7 +443,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// Flat input line (no border) + separator + status bar.
+	// ── Input box + status bar ──
 	b.WriteString(m.renderInputBox())
 	b.WriteByte('\n')
 	b.WriteString(m.renderStatusBar())
@@ -534,4 +588,11 @@ func cacheLine(v verbosity, reply agent.Reply) string {
 	}
 	return noticeStyle.Render(fmt.Sprintf("  ⓘ cache: %d read, %d write (in %d / out %d)",
 		reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens))
+}
+
+// dumpScrollbackCmd returns a tea.Cmd that prints the scrollback buffer to the
+// terminal's main screen before the alt-screen is torn down. This preserves the
+// conversation history after exit, matching Claude Code's behaviour.
+func (m *tuiModel) dumpScrollbackCmd() tea.Cmd {
+	return tea.Println(strings.Join(m.scrollback, "\n"))
 }
