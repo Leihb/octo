@@ -36,7 +36,12 @@ func NewUserMessage(content string) Message {
 }
 
 // NewAssistantMessage constructs a Message with RoleAssistant.
+// If content is empty, it falls back to a non-empty placeholder so the
+// message is valid for providers (Anthropic rejects empty assistant content).
 func NewAssistantMessage(content string) Message {
+	if content == "" {
+		content = "[no content]"
+	}
 	return Message{Role: RoleAssistant, Content: content}
 }
 
