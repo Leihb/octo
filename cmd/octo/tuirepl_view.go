@@ -427,7 +427,11 @@ func (m *tuiModel) renderStatusBar() string {
 		segs = append(segs, [2]string{"cwd", m.cwd})
 	}
 	if used, window := m.a.ContextUsage(); window > 0 && used > 0 {
-		segs = append(segs, [2]string{"ctx", fmt.Sprintf("%d%%", used*100/window)})
+		pct := used * 100 / window
+		if pct > 100 {
+			pct = 100
+		}
+		segs = append(segs, [2]string{"ctx", fmt.Sprintf("%d%%", pct)})
 	}
 	if m.cfg.permEngine != nil {
 		segs = append(segs, [2]string{"perm", string(m.cfg.permEngine.GetMode())})
