@@ -23,7 +23,7 @@ func TestTUI_SlashExitQuits(t *testing.T) {
 
 func TestTUI_SlashInfoCommandsDontStartTurn(t *testing.T) {
 	// Info commands render synchronously and must not occupy the session.
-	for _, cmd := range []string{"/help", "/cost", "/skills", "/memory", "/mcp"} {
+	for _, cmd := range []string{"/help", "/skills", "/memory", "/mcp"} {
 		m := newTestModel()
 		_, cmdFn := m.dispatchSlash(cmd)
 		if m.turnRunning {

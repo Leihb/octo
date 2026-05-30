@@ -180,13 +180,11 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "/goal":
 		return m.dispatchGoal(strings.TrimSpace(strings.TrimPrefix(text, first)))
-	case "/help", "/cost", "/save", "/sessions", "/skills", "/memory", "/mcp":
+	case "/help", "/save", "/sessions", "/skills", "/memory", "/mcp":
 		var b bytes.Buffer
 		switch cmd {
 		case "/help":
 			printTuiHelp(&b)
-		case "/cost":
-			printCost(&b, m.a)
 		case "/save":
 			if err := saveSession(&b, cfg.session, m.a); err != nil {
 				fmt.Fprintf(&b, "save: %v\n", err)
@@ -420,9 +418,9 @@ func (m *tuiModel) renderInputBox() string {
 	return promptStyle.Render("> ") + m.ti.View()
 }
 
-// renderStatusBar renders the model / cwd / context% / cost / permission /
-// elapsed segments, with a separator line above and the contextual key hint
-// below (Claude Code style).
+// renderStatusBar renders the cwd / context% / permission / elapsed segments,
+// with a separator line above and the contextual key hint below (Claude Code
+// style).
 func (m *tuiModel) renderStatusBar() string {
 	var segs [][2]string
 	if m.cwd != "" {
@@ -430,9 +428,6 @@ func (m *tuiModel) renderStatusBar() string {
 	}
 	if used, window := m.a.ContextUsage(); window > 0 && used > 0 {
 		segs = append(segs, [2]string{"ctx", fmt.Sprintf("%d%%", used*100/window)})
-	}
-	if c := m.a.SessionCostUSD(); c > 0 {
-		segs = append(segs, [2]string{"cost", fmt.Sprintf("$%.4f", c)})
 	}
 	if m.cfg.permEngine != nil {
 		segs = append(segs, [2]string{"perm", string(m.cfg.permEngine.GetMode())})

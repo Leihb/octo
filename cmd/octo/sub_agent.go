@@ -66,11 +66,6 @@ func (s *agentSpawner) Spawn(ctx context.Context, req tools.SpawnRequest) (tools
 	child.MaxTokens = s.parent.MaxTokens
 	child.Gate = s.parent.Gate
 	child.MaxTurns = childMaxTurns
-	// Inherit the parent's hard cost ceiling — the child's spend is rolled
-	// back into the parent below, but the per-loop check inside the child
-	// uses its own counter, so a budget the user already set on the parent
-	// should still constrain the child.
-	child.MaxCostUSD = s.parent.MaxCostUSD
 
 	lc := &liveChild{agent: child, tools: childTools, executor: s.executor}
 	id := s.reg.put(lc)

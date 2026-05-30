@@ -113,7 +113,7 @@ func chatCandidates(words []string, prev string) []string {
 	case "--permission-mode":
 		return []string{"interactive", "strict", "auto"}
 	case "--model", "--system", "--max-tokens", "--max-turns",
-		"--max-cost", "--compact-threshold", "--thinking-budget",
+		"--compact-threshold", "--thinking-budget",
 		"--sandbox-write", "--sandbox-read":
 		// These take freeform values; nothing useful to suggest.
 		return nil

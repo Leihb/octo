@@ -108,7 +108,6 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	verboseFlag := fs.Bool("verbose", false, "Print extra context (provider/model/endpoint, always-on cache line). Also OCTO_VERBOSITY=verbose.")
 	permMode := fs.String("permission-mode", "", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask) | auto (allow on ask). Empty = use `octo config` value, else interactive.")
 	maxTurns := fs.Int("max-turns", 0, "Max provider round-trips per message in the agentic loop (0 = auto: 100 interactive, unlimited unattended/--prompt-file)")
-	maxCost := fs.Float64("max-cost", 0, "Stop the session once estimated cost (USD) reaches this; 0 = unlimited")
 	compactThreshold := fs.Int("compact-threshold", 0, "Compact older history once a turn's input crosses this many tokens; 0 = auto (~75% of the model's context window), <0 = disabled")
 	thinkingBudget := fs.Int("thinking-budget", 0, "Enable extended thinking with this token budget (Anthropic/Kimi); 0 = off")
 	useSandbox := fs.Bool("sandbox", false, "Confine terminal commands to the project dir + tmp with no network (OS-enforced; macOS/Linux). Fails closed if unavailable.")
@@ -303,7 +302,6 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}, resolvedModel)
 	a.MaxTokens = *maxTokens
 	a.MaxTurns = resolveMaxTurns(*maxTurns, seedPrompt != "", stdinIsTTY(stdin))
-	a.MaxCostUSD = *maxCost
 	a.CompactThreshold = *compactThreshold
 
 	// Build the tool executor up-front (REPL mode only — single-turn mode

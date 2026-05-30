@@ -341,7 +341,6 @@ func printTuiHelp(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  /help       Show this message")
 	fmt.Fprintln(w, "  /init       Analyze the repo and generate/update .octorules (needs --tools)")
-	fmt.Fprintln(w, "  /cost       Show token usage and estimated cost for this session")
 	fmt.Fprintln(w, "  /save       Save the session now (it also auto-saves after each turn)")
 	fmt.Fprintln(w, "  /sessions   List the 10 most recent sessions")
 	fmt.Fprintln(w, "  /skills     List available skills (trigger one with /<name>)")
@@ -450,7 +449,7 @@ func pluralS(n int) string {
 // one (so /help always means help even if a skill dir is named "help").
 var reservedReplCommands = map[string]bool{
 	"init": true, "exit": true, "quit": true, "help": true,
-	"cost": true, "save": true, "sessions": true, "skills": true,
+	"save": true, "sessions": true, "skills": true,
 	"memory": true, "mcp": true, "goal": true,
 }
 
@@ -492,15 +491,6 @@ func printSkills(w io.Writer, reg *skills.Registry) {
 	fmt.Fprintln(w, "Available skills (trigger with /<name>):")
 	for _, s := range reg.List() {
 		fmt.Fprintf(w, "  /%-16s [%-7s] %s\n", s.Name, s.Source, s.Description)
-	}
-}
-
-func printCost(w io.Writer, a *agent.Agent) {
-	in, out := a.SessionTokens()
-	cost := a.SessionCostUSD()
-	fmt.Fprintf(w, "Tokens: %d in / %d out  |  est. $%.6f\n", in, out, cost)
-	if read, write := a.SessionCacheTokens(); read > 0 || write > 0 {
-		fmt.Fprintf(w, "Cache:  %d read / %d write\n", read, write)
 	}
 }
 

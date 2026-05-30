@@ -119,7 +119,6 @@ var (
 	statusHintStyle  = lipgloss.NewStyle().Foreground(ColDimmer).Italic(true)
 	statusBarStyle   = lipgloss.NewStyle().Foreground(ColBorder)
 	statusModelStyle = lipgloss.NewStyle().Foreground(ColBrandDim).Bold(true)
-	statusCostStyle  = lipgloss.NewStyle().Foreground(ColAccent)
 	statusTimeStyle  = lipgloss.NewStyle().Foreground(ColMuted)
 )
 
@@ -140,8 +139,6 @@ func StatusBar(segments [][2]string, hint string, width int) string {
 		switch label {
 		case "model":
 			rendered = statusModelStyle.Render(value)
-		case "cost":
-			rendered = statusCostStyle.Render(value)
 		case "elapsed":
 			rendered = statusTimeStyle.Render(value)
 		default:

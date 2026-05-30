@@ -117,11 +117,6 @@ type Agent struct {
 	// with a friendly budget reply (StopReason "max_turns"), not an error.
 	MaxTurns int
 
-	// MaxCostUSD caps cumulative session spend. 0 = unlimited. When the
-	// running estimate reaches the cap the loop stops before the next
-	// provider call with StopReason "max_cost".
-	MaxCostUSD float64
-
 	// CompactThreshold controls history compaction: when the most recent
 	// context sent (lastInputTokens) crosses the effective trigger, the next
 	// Run/RunStream summarizes the older turns before continuing. Semantics:
@@ -159,7 +154,6 @@ type Agent struct {
 // can distinguish "the model finished" from "we cut it off".
 const (
 	StopReasonMaxTurns    = "max_turns"
-	StopReasonMaxCost     = "max_cost"
 	StopReasonInterrupted = "interrupted"
 )
 
@@ -422,15 +416,6 @@ func (a *Agent) runLoop(
 		// Interrupt (Ctrl-C) between iterations — e.g. right after a tool batch.
 		if ctx.Err() != nil {
 			return a.finishInterrupted(handler)
-		}
-
-		// Cost gate: checked before each provider call. Cost is only known
-		// after a response, so the worst case is one call that tips over the
-		// budget; we stop before the next.
-		if a.MaxCostUSD > 0 && a.SessionCostUSD() >= a.MaxCostUSD {
-			return a.budgetStop(handler, StopReasonMaxCost, fmt.Sprintf(
-				"[octo] Stopped: session cost budget ($%.4f) reached. The task may be "+
-					"incomplete — raise --max-cost or start a new session to continue.", a.MaxCostUSD))
 		}
 
 		reply, err := send(ctx, a.History.Snapshot())
@@ -857,41 +842,6 @@ func (a *Agent) SessionCacheTokens() (readTokens, writeTokens int) {
 // Pricing is based on publicly listed rates as of May 2026 and is best-effort
 // — it uses a prefix match on the model name and falls back to a conservative
 // mid-tier estimate for unknown models.
-func (a *Agent) SessionCostUSD() float64 {
-	in, out := float64(a.sessionInputTokens), float64(a.sessionOutputTokens)
-	inPrice, outPrice := modelPricePerMillion(a.Model)
-	return (in/1_000_000)*inPrice + (out/1_000_000)*outPrice
-}
-
-// modelPricePerMillion returns (inputPricePerMillion, outputPricePerMillion)
-// in USD for the given model name. Prices are approximate and may be stale.
-func modelPricePerMillion(model string) (float64, float64) {
-	switch {
-	// Anthropic Claude 4.x Haiku — cheapest tier
-	case hasPrefix(model, "claude-haiku"):
-		return 0.80, 4.00
-	// Anthropic Claude 4.x Sonnet
-	case hasPrefix(model, "claude-sonnet"):
-		return 3.00, 15.00
-	// Anthropic Claude 4.x Opus
-	case hasPrefix(model, "claude-opus"):
-		return 15.00, 75.00
-	// OpenAI GPT-4o mini
-	case hasPrefix(model, "gpt-4o-mini"):
-		return 0.15, 0.60
-	// OpenAI GPT-4o
-	case hasPrefix(model, "gpt-4o"):
-		return 2.50, 10.00
-	// Unknown — conservative mid-tier estimate
-	default:
-		return 3.00, 15.00
-	}
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
 // popLast is an internal helper used by Turn to undo the user-message append
 // when the Sender call fails. Exported users should not need this.
 func (h *History) popLast() {

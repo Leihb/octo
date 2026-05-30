@@ -427,39 +427,6 @@ func TestAgent_Run_CustomMaxTurns(t *testing.T) {
 	}
 }
 
-func TestAgent_Run_MaxCostStops(t *testing.T) {
-	// First reply reports tokens that push session cost over the budget; the
-	// loop must stop before the second provider call.
-	send := &fakeToolSender{
-		replies: []Reply{
-			{
-				StopReason:   "tool_use",
-				Blocks:       []ContentBlock{NewToolUseBlock("c", "bash", nil)},
-				InputTokens:  1_000_000, // ~$3 at default sonnet input pricing
-				OutputTokens: 0,
-			},
-			{Content: "should not be reached", StopReason: "end_turn"},
-		},
-	}
-	exec := &fakeExecutor{}
-	a := New(send, "claude-sonnet-4-6")
-	a.MaxCostUSD = 0.50 // well under the first call's ~$3
-	defs := []ToolDefinition{{Name: "bash"}}
-
-	reply, err := a.Run(context.Background(), "go", defs, exec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply.StopReason != StopReasonMaxCost {
-		t.Errorf("StopReason = %q, want max_cost", reply.StopReason)
-	}
-	// One provider call happened (cost only known after it); the second was
-	// gated out.
-	if send.calls != 1 {
-		t.Errorf("provider calls = %d, want 1 (stopped on cost before 2nd)", send.calls)
-	}
-}
-
 func TestAgent_Run_SenderWithoutToolSupport_FallsBackToTurn(t *testing.T) {
 	// A plain fakeSender (no ToolSender) should just do a single Turn.
 	send := &fakeSender{reply: Reply{Content: "plain", StopReason: "end_turn"}}
