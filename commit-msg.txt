@@ -1,0 +1,12 @@
+tui: polish visual design with banner, styled prompt, and status bar
+
+- Add welcome banner (◆ octo chat) shown on startup, dismissed on first input
+- Replace plain "> " prompt with purple "❯ " using brand colour
+- Add input placeholder "Ask anything…"
+- Style user message echoes with blue tint (ColUserMsg)
+- Redesign status bar with top separator line and styled segments:
+  - model: muted purple bold
+  - cost: green accent
+  - elapsed: muted
+- Add new brand colours to theme: ColBrand, ColBrandDim, ColUserMsg, ColAssistant
+- Add Banner() and StatusBar() helpers to internal/tui with tests
