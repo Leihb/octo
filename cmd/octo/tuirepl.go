@@ -35,15 +35,15 @@ func runTUI(cfg replConfig) int {
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
-	// Eagerly probe terminal background colour so lipgloss caches the result
-	// before bubbletea owns stdin. lipgloss.AdaptiveColor and termenv both
-	// send OSC 11 queries; without eager probing the terminal's response leaks
-	// into the textinput as apparent user input (e.g. "11;rgb:1e1e/1e1e/2e2e\\").
+	// Eagerly probe terminal background colour before bubbletea owns stdin.
+	// lipgloss.AdaptiveColor sends an OSC 11 query on first use; if that
+	// happens after p.Run() the terminal's response (e.g. "11;rgb:1e1e/1e1e/2e2e\\")
+	// leaks into bubbletea's input reader and shows up as apparent user input.
 	//
-	// Only probe through lipgloss — it wraps termenv.DefaultOutput() and guards
-	// the query with sync.Once. Calling termenv.HasDarkBackground() directly
-	// would bypass that cache and fire a second query, whose response can race
-	// with bubbletea's input reader.
+	// tui.IsDark() guards the probe with sync.Once, so calling it here warms
+	// the cache. The result is also passed to markdownRenderer so glamour can
+	// use an explicit dark/light style instead of WithAutoStyle(), which would
+	// fire its own (uncached) termenv query later.
 	_ = tui.IsDark()
 
 	// Gate + asker raise their prompts through the same sink, so they render
@@ -229,7 +229,11 @@ func newTUIModel(cfg replConfig) *tuiModel {
 	// them for input-history recall instead.
 	ti.KeyMap.NextSuggestion = key.Binding{}
 	ti.KeyMap.PrevSuggestion = key.Binding{}
-	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1, showBanner: true}
+	style := "dark"
+	if !tui.IsDark() {
+		style = "light"
+	}
+	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1, showBanner: true, md: markdownRenderer{style: style}}
 }
 
 func (m *tuiModel) Init() tea.Cmd { return textinput.Blink }
