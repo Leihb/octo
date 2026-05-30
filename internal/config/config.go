@@ -21,9 +21,10 @@ import (
 // missing file (or a missing field) leaves the zero value, and the caller
 // substitutes its built-in default.
 type Config struct {
-	Provider string `json:"provider,omitempty"`
-	Model    string `json:"model,omitempty"`
-	BaseURL  string `json:"base_url,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	Model          string `json:"model,omitempty"`
+	BaseURL        string `json:"base_url,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
 	// APIKey, when set, is a plaintext fallback used only if the provider's
 	// env var is empty. Opt-in via `octo config` and stored mode 0600. Prefer
 	// the env var.

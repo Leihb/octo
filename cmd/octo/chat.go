@@ -106,7 +106,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	noTUI := fs.Bool("no-tui", false, "Disable the interactive TUI on a terminal; use the plain line-based REPL (also OCTO_TUI=0)")
 	quietFlag := fs.Bool("quiet", false, "Strip all status chrome (no spinner, no banner, no cache line). Also OCTO_VERBOSITY=quiet.")
 	verboseFlag := fs.Bool("verbose", false, "Print extra context (provider/model/endpoint, always-on cache line). Also OCTO_VERBOSITY=verbose.")
-	permMode := fs.String("permission-mode", "interactive", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask) | auto (allow on ask)")
+	permMode := fs.String("permission-mode", "", "Tool permission handling: interactive (prompt on ask) | strict (deny on ask) | auto (allow on ask). Empty = use `octo config` value, else interactive.")
 	maxTurns := fs.Int("max-turns", 0, "Max provider round-trips per message in the agentic loop (0 = auto: 100 interactive, unlimited unattended/--prompt-file)")
 	maxCost := fs.Float64("max-cost", 0, "Stop the session once estimated cost (USD) reaches this; 0 = unlimited")
 	compactThreshold := fs.Int("compact-threshold", 0, "Compact older history once a turn's input crosses this many tokens; 0 = auto (~75% of the model's context window), <0 = disabled")
@@ -118,15 +118,6 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.Var(&sandboxRead, "sandbox-read", "Under --sandbox, an extra read-only directory (repeatable)")
 
 	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-
-	// Validate --permission-mode up front. Fail closed on a typo rather than
-	// silently falling back to the more-permissive interactive mode — a user
-	// who asked for "strict" and got "interactive" by typo is a security
-	// regression, not a convenience.
-	if *permMode != string(permission.ModeInteractive) && *permMode != string(permission.ModeStrict) && *permMode != string(permission.ModeAutoApprove) {
-		fmt.Fprintf(stderr, "octo chat: invalid --permission-mode %q (want 'interactive', 'strict', or 'auto')\n", *permMode)
 		return 2
 	}
 
@@ -197,6 +188,22 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Run `octo config` to rewrite ~/.octo/config.json.")
 		return 1
 	}
+
+	// Resolve permission mode: explicit flag > config file > interactive default.
+	resolvedPermMode := *permMode
+	if resolvedPermMode == "" {
+		resolvedPermMode = cfg.PermissionMode
+	}
+	if resolvedPermMode == "" {
+		resolvedPermMode = string(permission.ModeInteractive)
+	}
+	// Validate up front. Fail closed on a typo rather than silently falling
+	// back to the more-permissive interactive mode.
+	if resolvedPermMode != string(permission.ModeInteractive) && resolvedPermMode != string(permission.ModeStrict) && resolvedPermMode != string(permission.ModeAutoApprove) {
+		fmt.Fprintf(stderr, "octo chat: invalid --permission-mode %q (want 'interactive', 'strict', or 'auto')\n", resolvedPermMode)
+		return 2
+	}
+
 	provName, resolvedModel, ok := resolveProviderModel(*providerName, *model, cfg)
 	if !ok {
 		fmt.Fprintf(stderr, "octo chat: unknown provider %q (use 'anthropic' or 'openai')\n", provName)
@@ -466,7 +473,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 			// Build the permission engine that gates every tool call.
 			cwd, _ := os.Getwd()
-			engine, err := permission.New(permissionConfigPath(), cwd, resolvePermissionMode(*permMode))
+			engine, err := permission.New(permissionConfigPath(), cwd, resolvePermissionMode(resolvedPermMode))
 			if err != nil {
 				fmt.Fprintf(stderr, "octo chat: permission config: %v\n", err)
 				return 1
