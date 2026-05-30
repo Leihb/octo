@@ -31,7 +31,7 @@ func runTUI(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	m := newTUIModel(cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
@@ -227,6 +227,10 @@ type tuiModel struct {
 	// On exit the buffer is dumped back to the main screen so history survives.
 	scrollback []string
 
+	// scrollOffset is the number of lines the user has scrolled up in the
+	// scrollback (0 = pinned to bottom, showing the newest content).
+	scrollOffset int
+
 	// height is the terminal height in cells, updated by WindowSizeMsg.
 	height int
 }
@@ -313,6 +317,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ti.Width = msg.Width - 4 // account for border + padding
 		return m, nil
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
