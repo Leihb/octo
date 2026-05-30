@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ type bgProcess struct {
 	id      string
 	command string
 	cancel  context.CancelFunc
+	proc    *os.Process // set after Start; used for hard-kill
 	start   time.Time
 
 	mu        sync.Mutex
@@ -149,7 +151,7 @@ func (m *BackgroundManager) Start(command string) (string, error) {
 	m.mu.Lock()
 	m.seq++
 	id := fmt.Sprintf("bg_%d", m.seq)
-	p := &bgProcess{id: id, command: command, cancel: cancel, start: time.Now()}
+	p := &bgProcess{id: id, command: command, cancel: cancel, proc: cmd.Process, start: time.Now()}
 	m.procs[id] = p
 	m.mu.Unlock()
 
@@ -237,6 +239,9 @@ func (m *BackgroundManager) Kill(id string) bool {
 		return false
 	}
 	p.cancel()
+	if p.proc != nil {
+		_ = killProcessGroup(p.proc)
+	}
 	return true
 }
 
