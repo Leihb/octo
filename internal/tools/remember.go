@@ -57,13 +57,13 @@ func (RememberTool) Definition() agent.ToolDefinition {
 	}
 }
 
-func (RememberTool) Execute(_ context.Context, _ string, input map[string]any) (string, error) {
+func (RememberTool) Execute(_ context.Context, _ string, input map[string]any) (agent.ToolResult, error) {
 	content := strings.TrimSpace(stringArg(input, "content"))
 	if content == "" {
-		return "", fmt.Errorf("remember: content is required")
+		return agent.ToolResult{Text: ""}, fmt.Errorf("remember: content is required")
 	}
 	if !memoryEnabled() {
-		return "", fmt.Errorf("remember: memory is disabled for this session")
+		return agent.ToolResult{Text: ""}, fmt.Errorf("remember: memory is disabled for this session")
 	}
 	desc := strings.TrimSpace(stringArg(input, "description"))
 	if desc == "" {
@@ -78,12 +78,12 @@ func (RememberTool) Execute(_ context.Context, _ string, input map[string]any) (
 		Body:        content,
 	}
 	if e.Name == "" {
-		return "", fmt.Errorf("remember: could not derive a name from the content")
+		return agent.ToolResult{Text: ""}, fmt.Errorf("remember: could not derive a name from the content")
 	}
 	if err := activeMemory.Save(e); err != nil {
-		return "", fmt.Errorf("remember: %w", err)
+		return agent.ToolResult{Text: ""}, fmt.Errorf("remember: %w", err)
 	}
-	return "Remembered (" + string(normalizeType(e.Type)) + "): " + desc, nil
+	return agent.ToolResult{Text: "Remembered (" + string(normalizeType(e.Type)) + "): " + desc}, nil
 }
 
 // normalizeType mirrors the store's defaulting so the confirmation message

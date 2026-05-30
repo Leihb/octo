@@ -13,7 +13,7 @@ import (
 // interface is private so adding methods later doesn't break consumers.
 type tool interface {
 	Definition() agent.ToolDefinition
-	Execute(ctx context.Context, name string, input map[string]any) (string, error)
+	Execute(ctx context.Context, name string, input map[string]any) (agent.ToolResult, error)
 }
 
 // allTools is the canonical, ordered list of built-in tools shipped with
@@ -60,12 +60,12 @@ func NewDefaultRegistry() DefaultRegistry {
 }
 
 // Execute implements agent.ToolExecutor.
-func (r DefaultRegistry) Execute(ctx context.Context, name string, input map[string]any) (string, error) {
+func (r DefaultRegistry) Execute(ctx context.Context, name string, input map[string]any) (agent.ToolResult, error) {
 	// MCP tools land here too — route them first so an "mcp__…" name
 	// never falls through to the unknown-tool path. executeMCP returns
 	// ok=false when the name isn't ours, then dispatch continues below.
 	if out, ok, err := executeMCP(ctx, name, input); ok {
-		return out, err
+		return agent.ToolResult{Text: out}, err
 	}
 
 	// Read-before-write pre-check (skipped when no tracker is configured).
@@ -73,7 +73,7 @@ func (r DefaultRegistry) Execute(ctx context.Context, name string, input map[str
 		if path, ok := input["path"].(string); ok {
 			if abs, err := resolvePath(path); err == nil {
 				if cerr := r.tracker.CheckWritable(abs); cerr != nil {
-					return "", cerr
+					return agent.ToolResult{}, cerr
 				}
 			}
 		}
@@ -96,7 +96,7 @@ func (r DefaultRegistry) Execute(ctx context.Context, name string, input map[str
 			return out, err
 		}
 	}
-	return "", fmt.Errorf("unknown tool %q", name)
+	return agent.ToolResult{Text: ""}, fmt.Errorf("unknown tool %q", name)
 }
 
 // DefaultTools returns the slice of ToolDefinitions sent to the LLM when
