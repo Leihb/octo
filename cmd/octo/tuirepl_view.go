@@ -16,18 +16,19 @@ import (
 )
 
 var (
-	promptStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-	noticeStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	toolErrStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	queueStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	modalStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
-	hintStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
-	statusStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	promptStyle   = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
+	noticeStyle   = lipgloss.NewStyle().Foreground(tui.ColMuted)
+	errorStyle    = lipgloss.NewStyle().Foreground(tui.ColDanger)
+	toolErrStyle  = lipgloss.NewStyle().Foreground(tui.ColDanger)
+	queueStyle    = lipgloss.NewStyle().Foreground(tui.ColAccent)
+	modalStyle    = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
+	hintStyle     = lipgloss.NewStyle().Foreground(tui.ColDimmer).Italic(true)
+	statusStyle   = lipgloss.NewStyle().Foreground(tui.ColMuted)
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(tui.ColBorder).
 			Padding(0, 1)
+	userEchoStyle = lipgloss.NewStyle().Foreground(tui.ColUserMsg).Bold(true)
 )
 
 // handleKey routes a keypress by context: a modal grabs all keys; otherwise the
@@ -125,6 +126,7 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 	if text == "" {
 		return m, nil
 	}
+	m.showBanner = false // dismiss welcome banner on first input
 	m.ti.Reset()
 	m.inputHistoryIdx = -1
 	// Save to history for ↑/↓ recall (dedup consecutive identical lines).
@@ -343,6 +345,12 @@ func (m *tuiModel) View() string {
 
 	var b strings.Builder
 
+	// Welcome banner shown on first launch until the user starts typing.
+	if m.showBanner {
+		b.WriteString(tui.Banner("", m.a.Model, m.cwd, m.width))
+		b.WriteByte('\n')
+	}
+
 	// Live partial assistant line (committed lines already scrolled up).
 	if p := m.partial.String(); p != "" {
 		b.WriteString(p)
@@ -414,7 +422,7 @@ func (m *tuiModel) spinnerLine(label string, since time.Time) string {
 // sized to the terminal width. Falls back to a borderless line before the
 // first WindowSizeMsg (width 0) or on a very narrow terminal.
 func (m *tuiModel) renderInputBox() string {
-	content := promptStyle.Render("> ") + m.ti.View()
+	content := promptStyle.Render("❯ ") + m.ti.View()
 	if m.width <= 6 {
 		return content
 	}
@@ -424,21 +432,22 @@ func (m *tuiModel) renderInputBox() string {
 // renderStatusBar renders the model / cwd / context% / cost / permission /
 // elapsed segments, with the contextual key hint on a dim line below.
 func (m *tuiModel) renderStatusBar() string {
-	segs := []string{m.a.Model}
+	var segs [][2]string
+	segs = append(segs, [2]string{"model", m.a.Model})
 	if m.cwd != "" {
-		segs = append(segs, m.cwd)
+		segs = append(segs, [2]string{"cwd", m.cwd})
 	}
 	if used, window := m.a.ContextUsage(); window > 0 && used > 0 {
-		segs = append(segs, fmt.Sprintf("ctx %d%%", used*100/window))
+		segs = append(segs, [2]string{"ctx", fmt.Sprintf("%d%%", used*100/window)})
 	}
 	if c := m.a.SessionCostUSD(); c > 0 {
-		segs = append(segs, fmt.Sprintf("$%.4f", c))
+		segs = append(segs, [2]string{"cost", fmt.Sprintf("$%.4f", c)})
 	}
 	if m.cfg.permEngine != nil {
-		segs = append(segs, string(m.cfg.permEngine.GetMode()))
+		segs = append(segs, [2]string{"perm", string(m.cfg.permEngine.GetMode())})
 	}
 	if m.turnRunning && !m.turnStart.IsZero() {
-		segs = append(segs, time.Since(m.turnStart).Round(time.Second).String())
+		segs = append(segs, [2]string{"elapsed", time.Since(m.turnStart).Round(time.Second).String()})
 	}
 
 	hint := "Enter send · /exit quit · Ctrl+D quit"
@@ -448,7 +457,7 @@ func (m *tuiModel) renderStatusBar() string {
 	if len(m.queue) > 0 {
 		hint += " · Ctrl+X unqueue"
 	}
-	return statusStyle.Render(strings.Join(segs, " · ")) + "\n" + hintStyle.Render(hint)
+	return tui.StatusBar(segs, hint, m.width)
 }
 
 // workingDir returns the current directory, or "" if it can't be determined.

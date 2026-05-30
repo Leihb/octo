@@ -194,6 +194,9 @@ type tuiModel struct {
 	// tools suppress their started line, so without this they'd show nothing
 	// until completion.)
 	running *runningTool
+
+	// showBanner is true until the first user input dismisses the welcome banner.
+	showBanner bool
 }
 
 // runningTool is the live indicator state for an in-flight card tool.
@@ -217,13 +220,13 @@ type modalState struct {
 func newTUIModel(cfg replConfig) *tuiModel {
 	ti := textinput.New()
 	ti.Prompt = ""
-	ti.Placeholder = ""
+	ti.Placeholder = "Ask anything…"
 	ti.Focus()
 	// Disable bubbles' built-in up/down (suggestion navigation) so we can use
 	// them for input-history recall instead.
 	ti.KeyMap.NextSuggestion = key.Binding{}
 	ti.KeyMap.PrevSuggestion = key.Binding{}
-	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1}
+	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1, showBanner: true}
 }
 
 func (m *tuiModel) Init() tea.Cmd { return textinput.Blink }
@@ -263,7 +266,7 @@ func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 	// animation ticker for the spinner + elapsed clock.
 	var echoCmd tea.Cmd
 	if echo != "" && !strings.HasPrefix(echo, "<system-reminder>") {
-		echoCmd = tea.Println(promptStyle.Render("> ") + echo)
+		echoCmd = tea.Println(userEchoStyle.Render("❯ ") + echo)
 	}
 	return tea.Batch(echoCmd, tickCmd())
 }

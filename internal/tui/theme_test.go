@@ -44,3 +44,36 @@ func TestChromaStyle_LightDark(t *testing.T) {
 		t.Errorf("chromaStyle: dark=%q light=%q", chromaStyle(true), chromaStyle(false))
 	}
 }
+
+func TestBanner_ContainsTitleAndInfo(t *testing.T) {
+	out := Banner("v1.0", "claude", "~/proj", 40)
+	for _, want := range []string{"octo chat", "claude", "~/proj", "──"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Banner missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestBanner_MinWidth(t *testing.T) {
+	out := Banner("", "", "", 5)
+	if !strings.Contains(out, "octo chat") {
+		t.Errorf("Banner should still render at tiny width; got:\n%s", out)
+	}
+}
+
+func TestStatusBar_SegmentsAndHint(t *testing.T) {
+	segs := [][2]string{{"model", "gpt-4"}, {"cost", "$0.01"}}
+	out := StatusBar(segs, "Enter send", 30)
+	for _, want := range []string{"gpt-4", "$0.01", "Enter send", "──"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("StatusBar missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatusBar_ZeroWidth(t *testing.T) {
+	out := StatusBar(nil, "hint", 0)
+	if !strings.Contains(out, "hint") {
+		t.Errorf("StatusBar should still render hint at width 0; got:\n%s", out)
+	}
+}
