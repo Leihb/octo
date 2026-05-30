@@ -167,6 +167,10 @@ func (t TerminalTool) ExecuteStream(
 	<-readDone     // ensure goroutine has flushed before reading `out`
 
 	body := strings.TrimRight(out.String(), "\n")
+	// Tabs confuse the TUI's cursor-position math (bubbletea can't predict
+	// where a tab stop lands). Replace them with spaces so inline rendering
+	// stays aligned with the terminal's actual cursor.
+	body = strings.ReplaceAll(body, "\t", "    ")
 	if waitErr != nil {
 		// Match the original Execute contract: non-zero exit is surfaced as
 		// result text, not as a Go error, so the LLM can read and adapt.

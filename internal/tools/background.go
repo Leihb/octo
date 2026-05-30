@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -144,7 +145,10 @@ func (m *BackgroundManager) Start(command string) (string, error) {
 		scanner := bufio.NewScanner(pr)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			p.append(append(scanner.Bytes(), '\n')) // Bytes() reused next Scan; append copies
+			line := scanner.Bytes()
+			// Tabs break the TUI's cursor-position math; replace with spaces.
+			line = bytes.ReplaceAll(line, []byte{'\t'}, []byte("    "))
+			p.append(append(line, '\n')) // append copies
 		}
 	}()
 	// Waiter: record exit, unblock the reader via EOF, then fire the onExit
