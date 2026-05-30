@@ -347,8 +347,9 @@ func (m *tuiModel) View() string {
 	}
 
 	// Live partial assistant line (committed lines already scrolled up).
+	// Render through glamour so wrapping stays consistent with committed blocks.
 	if p := m.partial.String(); p != "" {
-		b.WriteString(p)
+		b.WriteString(m.md.render(p, m.width))
 		b.WriteByte('\n')
 	}
 	// Animated activity indicator: a running card-tool, else the "thinking"
