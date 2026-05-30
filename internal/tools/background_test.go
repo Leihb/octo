@@ -129,6 +129,11 @@ func TestTerminalOutputTool(t *testing.T) {
 	waitFor(t, "terminal_output to show exit", func() bool {
 		rTool, err := outTool.Execute(context.Background(), "terminal_output", map[string]any{"id": "bg_1"})
 		if err != nil {
+			// Anti-polling block is temporary while the process is still running
+			// with no new output; retry until it exits.
+			if strings.Contains(err.Error(), "polling blocked") {
+				return false
+			}
 			t.Fatalf("terminal_output: %v", err)
 		}
 		res += rTool.Text
