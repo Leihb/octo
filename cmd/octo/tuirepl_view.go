@@ -28,6 +28,21 @@ var (
 
 // handleKey routes a keypress by context: a modal grabs all keys; otherwise the
 // keymap depends on whether a turn is running (design §7).
+func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Only handle wheel events; ignore clicks, drags, etc.
+	switch msg.Type {
+	case tea.MouseWheelUp:
+		m.scrollOffset++
+		return m, nil
+	case tea.MouseWheelDown:
+		if m.scrollOffset > 0 {
+			m.scrollOffset--
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modal != nil {
 		return m.handleModalKey(msg)
@@ -395,6 +410,19 @@ func (m *tuiModel) View() string {
 	start := 0
 	if len(m.scrollback) > available {
 		start = len(m.scrollback) - available
+	}
+	// Apply user scroll offset (mouse wheel), clamped so we never scroll past
+	// the top or below the bottom.
+	start -= m.scrollOffset
+	if start < 0 {
+		start = 0
+	}
+	maxOffset := len(m.scrollback) - available
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.scrollOffset > maxOffset {
+		m.scrollOffset = maxOffset
 	}
 	for i := start; i < len(m.scrollback); i++ {
 		b.WriteString(m.scrollback[i])
