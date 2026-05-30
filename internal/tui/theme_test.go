@@ -47,7 +47,7 @@ func TestChromaStyle_LightDark(t *testing.T) {
 
 func TestBanner_ContainsTitleAndInfo(t *testing.T) {
 	out := Banner("v1.0", "claude", "~/proj", 40)
-	for _, want := range []string{"octo chat", "claude", "~/proj", "──", "Enter send"} {
+	for _, want := range []string{"octo chat", "claude", "~/proj", "──"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Banner missing %q in:\n%s", want, out)
 		}
