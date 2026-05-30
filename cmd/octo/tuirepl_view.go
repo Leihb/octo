@@ -51,7 +51,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlD:
 		m.quit = true
-		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
+		return m, tea.Quit
 
 	case tea.KeyCtrlC:
 		if m.turnRunning {
@@ -59,7 +59,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.quit = true
-		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
+		return m, tea.Quit
 
 	case tea.KeyEsc:
 		if m.turnRunning {
@@ -196,7 +196,7 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "/exit", "/quit":
 		m.quit = true
-		return m, tea.Sequence(m.dumpScrollbackCmd(), tea.Quit)
+		return m, tea.Quit
 	case "/goal":
 		return m.dispatchGoal(strings.TrimSpace(strings.TrimPrefix(text, first)))
 	case "/help", "/save", "/sessions", "/skills", "/memory", "/mcp":
@@ -348,21 +348,6 @@ func keyIs(msg tea.KeyMsg, r rune) bool {
 
 // ── View ──
 
-// ccHeader renders the Claude Code-style top header: model · cwd.
-func (m *tuiModel) ccHeader() string {
-	var parts []string
-	if m.a.Model != "" {
-		parts = append(parts, m.a.Model)
-	}
-	if m.cwd != "" {
-		parts = append(parts, m.cwd)
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return noticeStyle.Render(strings.Join(parts, " · "))
-}
-
 // liveHeight returns the number of lines the "live" region (partial text,
 // spinner, queue, background, input box, status bar) occupies.
 func (m *tuiModel) liveHeight() int {
@@ -393,11 +378,9 @@ func (m *tuiModel) View() string {
 
 	var b strings.Builder
 
-	// ── Header ──
-	if h := m.ccHeader(); h != "" {
-		b.WriteString(h)
-		b.WriteByte('\n')
-	}
+	// ── Banner ──
+	b.WriteString(tui.Banner("", m.a.Model, m.cwd, m.width))
+	b.WriteByte('\n')
 
 	// ── Scrollback (message history) ──
 	// Calculate how many lines we can show between header and live region.
@@ -616,11 +599,4 @@ func cacheLine(v verbosity, reply agent.Reply) string {
 	}
 	return noticeStyle.Render(fmt.Sprintf("  ⓘ cache: %d read, %d write (in %d / out %d)",
 		reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens))
-}
-
-// dumpScrollbackCmd returns a tea.Cmd that prints the scrollback buffer to the
-// terminal's main screen before the alt-screen is torn down. This preserves the
-// conversation history after exit, matching Claude Code's behaviour.
-func (m *tuiModel) dumpScrollbackCmd() tea.Cmd {
-	return tea.Println(strings.Join(m.scrollback, "\n"))
 }
