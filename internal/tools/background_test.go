@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,61 @@ func TestKillShellTool(t *testing.T) {
 	if _, err := killTool.Execute(context.Background(), "kill_shell", map[string]any{"id": "bg_nope"}); err == nil {
 		t.Error("kill_shell on unknown id should error")
 	}
+}
+
+// TestTerminalTool_TimeoutPromotesToBackground verifies that a synchronous
+// command which exceeds TerminalTimeout is killed and automatically restarted
+// as a background process. The agent receives partial output plus a bg id.
+func TestTerminalTool_TimeoutPromotesToBackground(t *testing.T) {
+	// Use a very short timeout so the test doesn't take 30 s.
+	oldTimeout := TerminalTimeout
+	TerminalTimeout = 200 * time.Millisecond
+	defer func() { TerminalTimeout = oldTimeout }()
+
+	m := NewBackgroundManager()
+	term := TerminalTool{mgr: m}
+
+	// Use `go env` (fast, cross-platform) piped to a long sleep.  On POSIX
+	// `sleep` is available; on Windows we use `Start-Sleep` via PowerShell.
+	cmd := "echo partial && sleep 1"
+	if runtime.GOOS == "windows" {
+		cmd = "Write-Output partial; Start-Sleep -Seconds 1"
+	}
+	res, err := term.Execute(context.Background(), "terminal", map[string]any{
+		"command": cmd,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Should contain the partial output.
+	if !strings.Contains(res.Text, "partial") {
+		t.Errorf("result should contain partial output, got: %q", res.Text)
+	}
+	// Should mention the timeout and background promotion.
+	if !strings.Contains(res.Text, "timeout") {
+		t.Errorf("result should mention timeout, got: %q", res.Text)
+	}
+	if !strings.Contains(res.Text, "bg_1") {
+		t.Errorf("result should mention bg id, got: %q", res.Text)
+	}
+	// Should contain the anti-polling instruction.
+	if !strings.Contains(res.Text, "DO NOT poll") {
+		t.Errorf("result should warn against polling, got: %q", res.Text)
+	}
+
+	// The background process should eventually finish (sleep 0.5 + margin).
+	// Use a longer deadline than the default waitFor because CI under -race
+	// can be very slow.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		_, s, _ := m.Read("bg_1")
+		if strings.HasPrefix(s, "exited") {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for background process to exit")
 }
 
 func TestTerminalOutputTool_ReadOnly(t *testing.T) {
