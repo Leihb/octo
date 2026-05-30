@@ -300,6 +300,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		thinkingBudget: *thinkingBudget,
 		thinkingOut:    stdout,
 	}, resolvedModel)
+	a.CWD = cwd
 	a.MaxTokens = *maxTokens
 	a.MaxTurns = resolveMaxTurns(*maxTurns, seedPrompt != "", stdinIsTTY(stdin))
 	a.CompactThreshold = *compactThreshold

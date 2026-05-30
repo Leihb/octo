@@ -108,6 +108,11 @@ type Agent struct {
 	History   *History
 	Sender    Sender
 
+	// CWD is the working directory used to resolve project context (e.g.
+	// .octorules) for the planner. Callers should set this to the repo root
+	// before invoking PlanTask.
+	CWD string
+
 	// Gate, when non-nil, vets every tool call before execution. A nil
 	// Gate means no gating — all tool calls run (the pre-M6.5 behaviour).
 	Gate PermissionGate

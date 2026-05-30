@@ -113,6 +113,7 @@ func runTaskStart(args []string, stdout, stderr io.Writer) int {
 	}, resolvedModel)
 	a.MaxTokens = defaultMaxTokensForPlanner
 	cwd, _ := os.Getwd()
+	a.CWD = cwd
 	a.System = prompt.Compose("", cwd, buildEnvContext(cwd), "", "")
 
 	fmt.Fprintf(stdout, "Planning…  goal: %s\n", oneLine(goal))
@@ -261,6 +262,7 @@ func runTaskRun(args []string, stdout, stderr io.Writer) int {
 	}, resolvedModel)
 	parent.MaxTokens = defaultMaxTokensForPlanner
 	cwd, _ := os.Getwd()
+	parent.CWD = cwd
 	parent.System = prompt.Compose("", cwd, buildEnvContext(cwd), "", "")
 
 	executor := tools.NewDefaultRegistry()
@@ -515,6 +517,7 @@ func resumeAndRun(t *taskgraph.Task, flagProvider, flagModel string, cfg config.
 	parent := agent.New(providerSender{p: prov, cacheKey: newCacheKey()}, resolvedModel)
 	parent.MaxTokens = defaultMaxTokensForPlanner
 	cwd, _ := os.Getwd()
+	parent.CWD = cwd
 	parent.System = prompt.Compose("", cwd, buildEnvContext(cwd), "", "")
 
 	executor := tools.NewDefaultRegistry()

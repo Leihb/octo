@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -141,5 +143,53 @@ func TestPlanTask_TokenUsageAccrued(t *testing.T) {
 	in, out := a.SessionTokens()
 	if in == 0 || out == 0 {
 		t.Errorf("PlanTask should accrue token usage, got (%d,%d)", in, out)
+	}
+}
+
+func TestReadProjectContext_MissingFile(t *testing.T) {
+	if got := readProjectContext(t.TempDir()); got != "" {
+		t.Errorf("missing file should yield empty, got %q", got)
+	}
+}
+
+func TestReadProjectContext_ReadsAndTruncates(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Repeat("a", maxProjectContextChars+100)
+	if err := os.WriteFile(filepath.Join(dir, projectContextFile), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := readProjectContext(dir)
+	if !strings.HasPrefix(got, strings.Repeat("a", maxProjectContextChars)) {
+		t.Error("expected prefix of repeated 'a' chars")
+	}
+	if !strings.HasSuffix(got, "\n... [truncated]") {
+		t.Errorf("expected truncation suffix, got suffix %q", got[len(got)-20:])
+	}
+}
+
+func TestPlanTask_IncludesProjectContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, projectContextFile), []byte("This is a Go CLI project."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &stubExtractSender{reply: `{"subtasks":[{"description":"step one"}]}`}
+	a := New(s, "test-model")
+	a.CWD = dir
+	_, err := a.PlanTask(context.Background(), "Add feature X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.lastMessages) == 0 {
+		t.Fatal("expected a user message")
+	}
+	msg := s.lastMessages[0].Content
+	if !strings.Contains(msg, "Project context:") {
+		t.Errorf("user message should contain 'Project context:', got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "This is a Go CLI project.") {
+		t.Errorf("user message should contain project context text, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Add feature X") {
+		t.Errorf("user message should still contain the goal, got:\n%s", msg)
 	}
 }

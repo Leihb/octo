@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -82,6 +84,16 @@ type PlannedSubtask struct {
 	BlockedBy   []int  `json:"blocked_by,omitempty"`
 }
 
+// maxProjectContextChars caps the project context injected into the planner
+// user message. The planner is a side-call with a tight token budget; we
+// truncate aggressively rather than risk pushing the context over the limit.
+const maxProjectContextChars = 4000
+
+// projectContextFile is the per-repo conventions file the planner reads to
+// understand what kind of project it is planning for. Kept as a constant so
+// it matches prompt.ProjectContextFile without importing prompt.
+const projectContextFile = ".octorules"
+
 // PlanTask runs the planner side-call over goal and returns the resulting
 // subtask DAG. It does not write anything to disk — the caller persists
 // via internal/taskgraph.
@@ -98,7 +110,15 @@ func (a *Agent) PlanTask(ctx context.Context, goal string) (PlanResult, error) {
 		return PlanResult{}, fmt.Errorf("agent: goal is required")
 	}
 
-	req := []Message{NewUserMessage("Goal:\n\n" + goal + "\n\nPlan the subtask DAG per your instructions. Output only the JSON object.")}
+	ctxText := readProjectContext(a.CWD)
+	var userMsg string
+	if ctxText != "" {
+		userMsg = "Project context:\n" + ctxText + "\n\nGoal:\n\n" + goal + "\n\nPlan the subtask DAG per your instructions. Output only the JSON object."
+	} else {
+		userMsg = "Goal:\n\n" + goal + "\n\nPlan the subtask DAG per your instructions. Output only the JSON object."
+	}
+
+	req := []Message{NewUserMessage(userMsg)}
 	reply, err := a.Sender.SendMessages(ctx, a.Model, planSystem, req, planMaxTokens)
 	if err != nil {
 		return PlanResult{}, err
@@ -106,6 +126,30 @@ func (a *Agent) PlanTask(ctx context.Context, goal string) (PlanResult, error) {
 	a.sessionInputTokens += reply.InputTokens
 	a.sessionOutputTokens += reply.OutputTokens
 	return parsePlan(reply.Content)
+}
+
+// readProjectContext returns the trimmed contents of .octorules in cwd, or
+// the current working directory if cwd is empty. The result is truncated to
+// maxProjectContextChars to stay within the planner's token budget. Returns
+// "" when the file is absent, unreadable, or empty.
+func readProjectContext(cwd string) string {
+	dir := cwd
+	if dir == "" {
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			return ""
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(dir, projectContextFile))
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxProjectContextChars {
+		s = s[:maxProjectContextChars] + "\n... [truncated]"
+	}
+	return s
 }
 
 // parsePlan extracts the JSON object from the planner's reply (tolerating
