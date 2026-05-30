@@ -263,7 +263,7 @@ func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 	// animation ticker for the spinner + elapsed clock.
 	var echoCmd tea.Cmd
 	if echo != "" && !strings.HasPrefix(echo, "<system-reminder>") {
-		echoCmd = tea.Println(promptStyle.Render("you> ") + echo)
+		echoCmd = tea.Println(promptStyle.Render("> ") + echo)
 	}
 	return tea.Batch(echoCmd, tickCmd())
 }

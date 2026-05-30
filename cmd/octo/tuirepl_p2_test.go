@@ -32,7 +32,7 @@ func TestRenderInputBox_BorderGating(t *testing.T) {
 	if got := m.renderInputBox(); strings.ContainsAny(got, "╭╮╰╯") {
 		t.Errorf("no border expected at width 0; got:\n%s", got)
 	}
-	if !strings.Contains(m.renderInputBox(), "you>") {
+	if !strings.Contains(m.renderInputBox(), "> ") {
 		t.Error("input box should always show the prompt")
 	}
 

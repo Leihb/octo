@@ -414,7 +414,7 @@ func (m *tuiModel) spinnerLine(label string, since time.Time) string {
 // sized to the terminal width. Falls back to a borderless line before the
 // first WindowSizeMsg (width 0) or on a very narrow terminal.
 func (m *tuiModel) renderInputBox() string {
-	content := promptStyle.Render("you> ") + m.ti.View()
+	content := promptStyle.Render("> ") + m.ti.View()
 	if m.width <= 6 {
 		return content
 	}

@@ -59,7 +59,7 @@ type lineReader interface {
 
 // scannerLineReader is the non-tty fallback. Tests rely on this — they pass
 // stdin as a strings.Reader and expect deterministic stdout including the
-// "you> " prompts.
+// "> " prompts.
 type scannerLineReader struct {
 	mu  sync.Mutex
 	in  *bufio.Scanner
@@ -123,7 +123,7 @@ func newReadlineReader(historyFile string) (*readlineLineReader, error) {
 		}
 	}
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:                 "you> ",
+		Prompt:                 "> ",
 		HistoryFile:            historyFile,
 		HistoryLimit:           5000,
 		HistorySearchFold:      true,
