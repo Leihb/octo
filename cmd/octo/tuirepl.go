@@ -12,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/muesli/termenv"
 )
 
 // runTUI is the interactive bubbletea REPL: the TTY counterpart to runREPL's
@@ -36,12 +35,16 @@ func runTUI(cfg replConfig) int {
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
-	// Eagerly probe terminal background colour so lipgloss / termenv cache the
-	// result before bubbletea owns stdin. Both libraries send OSC 11 queries;
-	// without eager probing the terminal's response leaks into the textinput as
-	// apparent user input (e.g. "11;rgb:1e1e/1e1e/2e2e\\").
+	// Eagerly probe terminal background colour so lipgloss caches the result
+	// before bubbletea owns stdin. lipgloss.AdaptiveColor and termenv both
+	// send OSC 11 queries; without eager probing the terminal's response leaks
+	// into the textinput as apparent user input (e.g. "11;rgb:1e1e/1e1e/2e2e\\").
+	//
+	// Only probe through lipgloss — it wraps termenv.DefaultOutput() and guards
+	// the query with sync.Once. Calling termenv.HasDarkBackground() directly
+	// would bypass that cache and fire a second query, whose response can race
+	// with bubbletea's input reader.
 	_ = tui.IsDark()
-	_ = termenv.HasDarkBackground()
 
 	// Gate + asker raise their prompts through the same sink, so they render
 	// as modals on this event loop instead of reading stdin (which bubbletea
