@@ -12,9 +12,9 @@ func TestRenderStatusBar_ShowsModelAndHint(t *testing.T) {
 	if !strings.Contains(out, "m") {
 		t.Errorf("status bar should include the model; got:\n%s", out)
 	}
-	// Idle hint.
-	if !strings.Contains(out, "Enter send") {
-		t.Errorf("idle status bar should show the send hint; got:\n%s", out)
+	// Idle: no persistent hint (the startup hint is shown once in the Banner).
+	if strings.Contains(out, "Enter send") {
+		t.Errorf("idle status bar should NOT show a persistent send hint; got:\n%s", out)
 	}
 	// Running hint switches.
 	m.turnRunning = true
