@@ -35,14 +35,16 @@ func TestTUI_SlashInfoCommandsDontStartTurn(t *testing.T) {
 	}
 }
 
-func TestTUI_SlashUnknownDoesNotStartTurn(t *testing.T) {
+func TestTUI_SlashUnknownFallsThroughToTurn(t *testing.T) {
+	// Unrecognised /-prefixed input is treated as ordinary user text (paths,
+	// regexes, etc.) matching the plain REPL behaviour.
 	m := newTestModel()
 	_, cmd := m.dispatchSlash("/bogus")
-	if m.turnRunning {
-		t.Error("unknown command must not start a turn")
+	if !m.turnRunning {
+		t.Error("unknown slash should start a turn like normal text")
 	}
 	if cmd == nil {
-		t.Error("unknown command should return a notice Cmd")
+		t.Error("expected a start-turn Cmd")
 	}
 }
 

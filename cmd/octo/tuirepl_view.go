@@ -151,11 +151,10 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 	return m, tea.Println(queueStyle.Render("→ steering: " + text))
 }
 
-// dispatchSlash handles a leading-"/" line when the session is idle. It mirrors
-// the command set the plain REPL used to own. Commands fall into three shapes:
-// fall-through (/init, /<skill>) expand to a prompt and run as a turn;
-// info commands render synchronously into the scrollback; /goal drives the
-// task-DAG flow (see tuirepl_goal.go).
+// dispatchSlash handles a leading-"/" line when the session is idle.
+// Recognised commands are dispatched immediately; anything else falls through
+// to startTurn as ordinary user text (paths, regexes, etc.) matching the plain
+// REPL behaviour.
 func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 	cfg := m.cfg
 
@@ -208,7 +207,9 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Println(strings.TrimRight(b.String(), "\n"))
 	default:
-		return m, tea.Println(noticeStyle.Render(fmt.Sprintf("Unknown command %q. Type /help for a list.", cmd)))
+		// Not a recognised command — treat it as ordinary user text so
+		// paths, regexes, and other /-prefixed messages reach the model.
+		return m, m.startTurn(text)
 	}
 }
 
