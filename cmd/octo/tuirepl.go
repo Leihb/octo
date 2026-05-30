@@ -8,6 +8,8 @@ import (
 
 	"github.com/Leihb/octo-agent/internal/agent"
 	"github.com/Leihb/octo-agent/internal/tools"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -137,8 +139,12 @@ type tuiModel struct {
 	// --plain (cfg.plain), where text commits as raw lines.
 	md markdownRenderer
 
-	// input is the single-line edit buffer (manual; no bubbles dependency).
-	input []rune
+	// ti is the single-line text input (bubbles/textinput).
+	ti textinput.Model
+
+	// inputHistory stores submitted lines for ↑/↓ recall.
+	inputHistory    []string
+	inputHistoryIdx int // -1 = not browsing, 0..len-1 = browsing
 
 	// turnRunning is true between starting a turn and turnFinishedMsg.
 	turnRunning bool
@@ -200,10 +206,18 @@ type modalState struct {
 }
 
 func newTUIModel(cfg replConfig) *tuiModel {
-	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir())}
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.Placeholder = ""
+	ti.Focus()
+	// Disable bubbles' built-in up/down (suggestion navigation) so we can use
+	// them for input-history recall instead.
+	ti.KeyMap.NextSuggestion = key.Binding{}
+	ti.KeyMap.PrevSuggestion = key.Binding{}
+	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1}
 }
 
-func (m *tuiModel) Init() tea.Cmd { return nil }
+func (m *tuiModel) Init() tea.Cmd { return textinput.Blink }
 
 // startTurn launches a turn whose transcript echo is the submitted line itself.
 func (m *tuiModel) startTurn(line string) tea.Cmd {
@@ -249,6 +263,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.ti.Width = msg.Width - 4 // account for border + padding
 		return m, nil
 
 	case tea.KeyMsg:

@@ -149,10 +149,11 @@ useTUI := isREPL && stdinIsTTY(stdin) && !*noTUI && !tuiDisabledByEnv() && seedP
 ## 9. 依赖
 
 - `github.com/charmbracelet/bubbletea` — 事件循环。
+- `github.com/charmbracelet/bubbles/textinput` — 单行输入框(光标移动、词跳转、剪贴板等)。
 - 已有:`lipgloss`(渲染)、`go-isatty`(TTY 探测)、`chzyer/readline`(纯文本路径的 idle 行编辑)。
 
-输入行手写(逐 rune + backspace),**不依赖** `bubbles`;Model 逻辑经 `Update` 直接单测,
-**不依赖** `teatest`。
+↑/↓ 用于输入历史 recall,因此禁用 textinput 内置的 suggestion 导航(`NextSuggestion`/
+`PrevSuggestion` 设为空 KeyBinding)。Model 逻辑经 `Update` 直接单测,**不依赖** `teatest`。
 
 ## 10. 测试(stdlib,无外部框架)
 

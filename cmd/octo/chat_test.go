@@ -39,6 +39,11 @@ func TestRunChat_NoArgs_EntersREPL(t *testing.T) {
 
 func TestRunChat_MissingAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	// Isolate config so a persisted key doesn't make the test falsely pass.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("USERPROFILE", tmp)
 	var stdout, stderr bytes.Buffer
 	code := runChat([]string{"hello"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 {

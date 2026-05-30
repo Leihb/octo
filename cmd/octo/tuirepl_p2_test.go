@@ -25,7 +25,7 @@ func TestRenderStatusBar_ShowsModelAndHint(t *testing.T) {
 
 func TestRenderInputBox_BorderGating(t *testing.T) {
 	m := newTestModel()
-	typeRunes(m, "hi")
+	setInput(m, "hi")
 
 	// Width 0 (pre-WindowSizeMsg): borderless, just the content.
 	m.width = 0

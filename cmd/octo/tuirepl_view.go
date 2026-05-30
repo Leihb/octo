@@ -55,7 +55,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Idle: clear the input line.
-		m.input = nil
+		m.ti.Reset()
+		m.inputHistoryIdx = -1
 		return m, nil
 
 	case tea.KeyCtrlX:
@@ -72,27 +73,46 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		return m.submit(msg.Alt)
 
-	case tea.KeyBackspace:
-		if n := len(m.input); n > 0 {
-			m.input = m.input[:n-1]
+	case tea.KeyUp:
+		if m.inputHistoryIdx+1 < len(m.inputHistory) {
+			m.inputHistoryIdx++
+			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
+			m.ti.CursorEnd()
 		}
 		return m, nil
 
-	case tea.KeyRunes, tea.KeySpace:
-		m.input = append(m.input, msg.Runes...)
+	case tea.KeyDown:
+		if m.inputHistoryIdx > 0 {
+			m.inputHistoryIdx--
+			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
+			m.ti.CursorEnd()
+		} else if m.inputHistoryIdx == 0 {
+			m.inputHistoryIdx = -1
+			m.ti.Reset()
+		}
 		return m, nil
 	}
-	return m, nil
+
+	// Everything else (typing, left/right, backspace, word movement, etc.)
+	// is handled by bubbles/textinput.
+	var cmd tea.Cmd
+	m.ti, cmd = m.ti.Update(msg)
+	return m, cmd
 }
 
 // submit acts on Enter / Alt+Enter. Idle → start a turn. Running → steer (Enter)
 // or queue (Alt+Enter). Empty input is ignored.
 func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(string(m.input))
+	text := strings.TrimSpace(m.ti.Value())
 	if text == "" {
 		return m, nil
 	}
-	m.input = nil
+	m.ti.Reset()
+	m.inputHistoryIdx = -1
+	// Save to history for ↑/↓ recall (dedup consecutive identical lines).
+	if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != text {
+		m.inputHistory = append(m.inputHistory, text)
+	}
 
 	// Slash commands are the TUI's alone — the plain REPL is a pure conversation
 	// loop. Only dispatched when idle; mid-turn input still steers / queues.
@@ -375,7 +395,7 @@ func (m *tuiModel) spinnerLine(label string, since time.Time) string {
 // sized to the terminal width. Falls back to a borderless line before the
 // first WindowSizeMsg (width 0) or on a very narrow terminal.
 func (m *tuiModel) renderInputBox() string {
-	content := promptStyle.Render("you> ") + string(m.input) + "▏"
+	content := promptStyle.Render("you> ") + m.ti.View()
 	if m.width <= 6 {
 		return content
 	}

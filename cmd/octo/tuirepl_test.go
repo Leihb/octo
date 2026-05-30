@@ -27,26 +27,27 @@ func newTestModel() *tuiModel {
 	return m
 }
 
-func typeRunes(m *tuiModel, s string) {
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+func setInput(m *tuiModel, s string) {
+	m.ti.SetValue(s)
+	m.ti.CursorEnd()
 }
 
 func TestTUI_IdleEnterStartsTurn(t *testing.T) {
 	m := newTestModel()
-	typeRunes(m, "hello")
+	setInput(m, "hello")
 	_, _ = m.submit(false)
 	if !m.turnRunning {
 		t.Fatal("idle Enter should start a turn")
 	}
-	if len(m.input) != 0 {
-		t.Errorf("input should clear after submit, got %q", string(m.input))
+	if m.ti.Value() != "" {
+		t.Errorf("input should clear after submit, got %q", m.ti.Value())
 	}
 }
 
 func TestTUI_RunningEnterSteers(t *testing.T) {
 	m := newTestModel()
 	m.turnRunning = true
-	typeRunes(m, "also handle errors")
+	setInput(m, "also handle errors")
 	_, _ = m.submit(false) // Enter
 	if !m.a.HasPendingSteer() {
 		t.Fatal("Enter while running should steer the agent")
@@ -84,7 +85,7 @@ func TestTUI_CtrlXUnqueuesMostRecent(t *testing.T) {
 func TestTUI_RunningAltEnterQueues(t *testing.T) {
 	m := newTestModel()
 	m.turnRunning = true
-	typeRunes(m, "run the linter")
+	setInput(m, "run the linter")
 	_, _ = m.submit(true) // Alt+Enter
 	if len(m.queue) != 1 || m.queue[0].text != "run the linter" {
 		t.Fatalf("Alt+Enter should queue, got %+v", m.queue)
@@ -248,5 +249,63 @@ func TestTUI_AppendText_PlainLineFlush(t *testing.T) {
 	m.appendText("world\nnext")
 	if got := m.partial.String(); got != "next" {
 		t.Errorf("partial = %q, want 'next' (completed line flushed)", got)
+	}
+}
+
+func TestTUI_InputHistoryRecall(t *testing.T) {
+	m := newTestModel()
+	m.inputHistory = []string{"first", "second", "third"}
+
+	// Up recalls the most recent line.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.ti.Value(); got != "third" {
+		t.Errorf("input after first Up = %q, want third", got)
+	}
+	if m.inputHistoryIdx != 0 {
+		t.Errorf("history idx = %d, want 0", m.inputHistoryIdx)
+	}
+
+	// Up again goes further back.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.ti.Value(); got != "second" {
+		t.Errorf("input after second Up = %q, want second", got)
+	}
+
+	// Down moves forward in history.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.ti.Value(); got != "third" {
+		t.Errorf("input after Down = %q, want third", got)
+	}
+
+	// Down past the newest restores empty input.
+	_, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.ti.Value() != "" {
+		t.Errorf("input after Down past newest = %q, want empty", m.ti.Value())
+	}
+	if m.inputHistoryIdx != -1 {
+		t.Errorf("history idx = %d, want -1", m.inputHistoryIdx)
+	}
+}
+
+func TestTUI_SubmitSavesToHistory(t *testing.T) {
+	m := newTestModel()
+	setInput(m, "hello")
+	_, _ = m.submit(false)
+	if len(m.inputHistory) != 1 || m.inputHistory[0] != "hello" {
+		t.Errorf("history after submit = %v, want [hello]", m.inputHistory)
+	}
+
+	// Duplicate consecutive line is deduped.
+	setInput(m, "hello")
+	_, _ = m.submit(false)
+	if len(m.inputHistory) != 1 {
+		t.Errorf("history after duplicate = %v, want still 1 entry", m.inputHistory)
+	}
+
+	// Different line is added.
+	setInput(m, "world")
+	_, _ = m.submit(false)
+	if len(m.inputHistory) != 2 || m.inputHistory[1] != "world" {
+		t.Errorf("history after new line = %v, want [hello world]", m.inputHistory)
 	}
 }
