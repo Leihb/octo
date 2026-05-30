@@ -111,9 +111,23 @@ func runREPL(cfg replConfig) int {
 		fmt.Fprintln(cfg.stdout)
 	}
 
+	// Wrap stdout/stderr in a syncWriter so the input goroutine (which prints
+	// prompts) and the turn-rendering goroutine (which prints replies/events)
+	// don't race on the same underlying writer (e.g. bytes.Buffer in tests).
+	out := cfg.stdout
+	errOut := cfg.stderr
+	if _, ok := cfg.stdout.(*syncWriter); !ok {
+		out = &syncWriter{w: cfg.stdout}
+	}
+	if _, ok := cfg.stderr.(*syncWriter); !ok {
+		errOut = &syncWriter{w: cfg.stderr}
+	}
+	cfg.stdout = out
+	cfg.stderr = errOut
+
 	reader := cfg.reader
 	if reader == nil {
-		reader = newScannerLineReader(cfg.stdin, cfg.stdout)
+		reader = newScannerLineReader(cfg.stdin, out)
 	}
 	defer reader.Close()
 
@@ -149,7 +163,7 @@ func runREPL(cfg replConfig) int {
 			// itself (returns ErrInterrupt), so this branch never fires in
 			// interactive mode — its loop just re-prompts on the next pass.
 			if _, ok := reader.(*scannerLineReader); ok {
-				fmt.Fprintln(cfg.stdout, "\n^C")
+				fmt.Fprintln(out, "\n^C")
 				if !cfg.noSave {
 					sess.SyncFrom(a.History)
 					_ = sess.Save()
@@ -166,7 +180,7 @@ func runREPL(cfg replConfig) int {
 	// over the resolved reader.
 	view := cfg.view
 	if view == nil {
-		view = newPlainView(reader, cfg.stdout, cfg.stderr, cfg.verbosity, cfg.plain)
+		view = newPlainView(reader, out, errOut, cfg.verbosity, cfg.plain)
 	}
 
 	// Permission gating raises its approval prompt through the view (stdin
@@ -179,31 +193,67 @@ func runREPL(cfg replConfig) int {
 		}
 	}
 
-	for {
-		raw, ok := readPromptLine(reader, "you> ", "... ")
-		if !ok {
-			if reader.Interrupted() {
-				// Ctrl-C at an idle prompt under readline: just re-loop so
-				// the user can keep typing. Matches the convention in
-				// bash/zsh — Ctrl-C clears the current line but doesn't
-				// exit the shell.
+	// inputCh carries user input lines from the read goroutine to the main
+	// loop. Closed on EOF so the select below exits cleanly.
+	//
+	// The goroutine never prints prompts itself — prompt rendering is the
+	// responsibility of the turn-rendering loop (or the terminal driver for
+	// readline). This avoids a data race between prompt printing and turn
+	// output on the shared stdout (bytes.Buffer in tests).
+	inputCh := make(chan string)
+	go func() {
+		defer close(inputCh)
+		for {
+			// Empty prompt so no output is written to stdout from the
+			// goroutine. readline manages its own terminal; scanner mode
+			// just reads lines without printing a prompt.
+			raw, ok := readPromptLine(reader, "", "")
+			if !ok {
+				if reader.Interrupted() {
+					// Ctrl-C at idle: re-prompt. The readline reader already
+					// cleared the line; just loop back for the next input.
+					continue
+				}
+				// EOF (Ctrl-D) or read error.
+				return
+			}
+			inputCh <- raw
+		}
+	}()
+
+	done := false
+	for !done {
+		var line string
+		var isAutoTurn bool
+
+		// Wait for either user input or a background-completion steer that
+		// arrived while we were idle. The steer path auto-triggers a turn so
+		// the model can react to the event without the user typing anything.
+		select {
+		case raw, ok := <-inputCh:
+			if !ok {
+				// EOF — input goroutine exited.
+				fmt.Fprintln(cfg.stdout)
+				done = true
 				continue
 			}
-			// EOF (Ctrl-D) or read error.
-			fmt.Fprintln(cfg.stdout)
-			break
-		}
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
+			line = strings.TrimSpace(raw)
+			if line == "" {
+				continue
+			}
+			if line == "/exit" || line == "/quit" {
+				done = true
+				continue
+			}
+		case <-idleSteerWait(a):
+			// Background process finished while idle. Drain the steer buffer
+			// and run an auto-turn so the model sees the notification.
+			line = a.DrainSteer()
+			isAutoTurn = true
 		}
 
-		// Plain REPL is a pure conversation loop: slash commands live in the TUI
-		// (tuirepl_view.go). The sole exception is /exit (and its /quit alias),
-		// kept so an interactive --no-tui user has an explicit way out besides
-		// Ctrl-C / Ctrl-D. Any other leading "/" is just message text.
-		if line == "/exit" || line == "/quit" {
-			break
+		if line == "" {
+			continue
 		}
 
 		// Regular message — streaming turn (or agentic loop when tools enabled).
@@ -235,6 +285,20 @@ func runREPL(cfg replConfig) int {
 				fmt.Fprintf(cfg.stderr, "(auto-save failed: %v)\n", err)
 			}
 		}
+
+		// After an auto-turn, briefly yield so the user sees the model's
+		// response before we loop back to waiting for input (or another
+		// steer). This prevents a rapid-fire sequence of auto-turns from
+		// feeling like a wall of text.
+		if isAutoTurn {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Wait for the input goroutine to finish so we don't leak it on exit.
+	// (It will exit once it sees EOF or the deferred reader.Close() below.)
+	// Drain any remaining input so the goroutine can terminate cleanly.
+	for range inputCh {
 	}
 
 	// Final save on exit.
@@ -250,6 +314,25 @@ func runREPL(cfg replConfig) int {
 		}
 	}
 	return 0
+}
+
+// idleSteerWait returns a channel that receives a single value once a steer
+// message is pending on the agent. It polls every 200 ms so the select in
+// runREPL doesn't block indefinitely on user input when a background process
+// completes. The returned channel is closed after firing; callers should not
+// reuse it.
+func idleSteerWait(a *agent.Agent) <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	go func() {
+		for {
+			if a.HasPendingSteer() {
+				ch <- struct{}{}
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+	return ch
 }
 
 // printTuiHelp lists the slash commands the TUI supports. Slash commands live

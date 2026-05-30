@@ -8,10 +8,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/chzyer/readline"
 	"github.com/mattn/go-isatty"
 )
+
+// syncWriter wraps an io.Writer with a mutex so concurrent writes are safe.
+// Used by the REPL to share stdout between the turn-rendering goroutine and
+// the input goroutine (which prints prompts).
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+// compile-time check: syncWriter must be used as a pointer so the mutex is
+// not copied when the writer is passed by value (e.g. into fmt.Fprintln).
+var _ io.Writer = (*syncWriter)(nil)
 
 // lineReader is the REPL's input abstraction. Two implementations:
 //
@@ -42,6 +61,7 @@ type lineReader interface {
 // stdin as a strings.Reader and expect deterministic stdout including the
 // "you> " prompts.
 type scannerLineReader struct {
+	mu  sync.Mutex
 	in  *bufio.Scanner
 	out io.Writer
 }
@@ -52,7 +72,9 @@ func newScannerLineReader(in io.Reader, out io.Writer) *scannerLineReader {
 
 func (s *scannerLineReader) ReadLine(prompt string) (string, bool) {
 	if prompt != "" {
+		s.mu.Lock()
 		fmt.Fprint(s.out, prompt)
+		s.mu.Unlock()
 	}
 	if !s.in.Scan() {
 		return "", false
