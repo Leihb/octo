@@ -441,6 +441,12 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 		// after the tool_result it was folded into. This preserves
 		// chronological order — the user sees their steer where the model
 		// actually receives it, not prematurely when they typed it.
+		// Also add to inputHistory so ↑ can recall each steer line.
+		for _, line := range strings.Split(ev.Text, "\n\n") {
+			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
+				m.inputHistory = append(m.inputHistory, line)
+			}
+		}
 		return tea.Println(userEchoStyle.Render("> ") + ev.Text)
 	}
 	return nil
@@ -522,7 +528,17 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 
 	// Degrade-to-queue: a steer that never hit a tool-batch boundary runs as
 	// the next turn, ahead of explicitly-queued items (design §8).
+	var cmds []tea.Cmd
 	if s := m.a.DrainSteer(); s != "" {
+		// Steer was never injected into a tool_result — show it now so the
+		// user sees it before the degraded turn starts, and add it to
+		// inputHistory so ↑ can recall it for re-editing.
+		for _, line := range strings.Split(s, "\n\n") {
+			cmds = append(cmds, tea.Println(userEchoStyle.Render("> ")+line))
+			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
+				m.inputHistory = append(m.inputHistory, line)
+			}
+		}
 		m.queue = append([]pendingItem{{text: s}}, m.queue...)
 	}
 
@@ -530,7 +546,11 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 	if len(m.queue) > 0 {
 		next := m.queue[0]
 		m.queue = m.queue[1:]
-		return m, m.startTurn(next.text)
+		cmds = append(cmds, m.startTurnEcho(next.text, "")) // echo already shown above
+		return m, tea.Batch(cmds...)
+	}
+	if len(cmds) > 0 {
+		return m, tea.Batch(cmds...)
 	}
 	return m, nil
 }
