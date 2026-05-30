@@ -97,12 +97,13 @@ func TestCompactTriggerTokens(t *testing.T) {
 func TestMaybeCompact_AutoDefaultTriggers(t *testing.T) {
 	f := &summarizeFake{summary: "S"}
 	a := New(f, "k2.6") // CompactThreshold defaults to 0 (auto)
-	for i := 0; i < 6; i++ {
-		a.History.Append(NewUserMessage(fmt.Sprintf("u%d", i)))
-		a.History.Append(NewAssistantMessage(fmt.Sprintf("a%d", i)))
+	trigger := int(float64(defaultContextWindow) * compactThresholdFraction)
+	// Build a history whose estimated token count exceeds the trigger.
+	longMsg := strings.Repeat("x ", 500) // ~250 tokens each
+	for estimateMessages(a.History.Snapshot()) <= trigger {
+		a.History.Append(NewUserMessage(longMsg))
+		a.History.Append(NewAssistantMessage(longMsg))
 	}
-	// Just over the auto trigger (0.75 * default window).
-	a.lastInputTokens = int(float64(defaultContextWindow)*compactThresholdFraction) + 1
 	if err := a.maybeCompact(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -114,14 +115,14 @@ func TestMaybeCompact_AutoDefaultTriggers(t *testing.T) {
 func TestMaybeCompact_DisabledOrBelowThreshold(t *testing.T) {
 	f := &summarizeFake{summary: "S"}
 	a := New(f, "m")
+	longMsg := strings.Repeat("x ", 500) // ~250 tokens each
 	for i := 0; i < 6; i++ {
-		a.History.Append(NewUserMessage(fmt.Sprintf("u%d", i)))
-		a.History.Append(NewAssistantMessage(fmt.Sprintf("a%d", i)))
+		a.History.Append(NewUserMessage(longMsg))
+		a.History.Append(NewAssistantMessage(longMsg))
 	}
 
 	// Disabled (negative threshold) — even a huge context must not compact.
 	a.CompactThreshold = -1
-	a.lastInputTokens = 999999
 	if err := a.maybeCompact(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -129,9 +130,8 @@ func TestMaybeCompact_DisabledOrBelowThreshold(t *testing.T) {
 		t.Errorf("disabled: should not compact; calls=%d len=%d", f.calls, a.History.Len())
 	}
 
-	// Enabled but under threshold.
-	a.CompactThreshold = 1000
-	a.lastInputTokens = 500
+	// Enabled but history still under threshold.
+	a.CompactThreshold = 100000 // way above the ~1500 tokens of the 12 messages
 	if err := a.maybeCompact(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -144,12 +144,13 @@ func TestMaybeCompact_RewritesHistory(t *testing.T) {
 	f := &summarizeFake{summary: "GOAL: build X. Touched main.go."}
 	a := New(f, "m")
 	a.CompactThreshold = 100
-	a.lastInputTokens = 200 // over threshold
 
+	longMsg := strings.Repeat("x ", 500) // ~250 tokens each
 	for i := 0; i < 6; i++ {
-		a.History.Append(NewUserMessage(fmt.Sprintf("u%d", i)))
-		a.History.Append(NewAssistantMessage(fmt.Sprintf("a%d", i)))
+		a.History.Append(NewUserMessage(longMsg))
+		a.History.Append(NewAssistantMessage(longMsg))
 	}
+	// History now well over the 100-token threshold.
 
 	if err := a.maybeCompact(context.Background()); err != nil {
 		t.Fatal(err)
@@ -173,8 +174,8 @@ func TestMaybeCompact_RewritesHistory(t *testing.T) {
 		t.Errorf("summarize saw %d messages, want 5 (4 dropped + instruction)", len(f.gotMsgs))
 	}
 	// The most-recent turn survived verbatim.
-	if snap[len(snap)-1].Content != "a5" {
-		t.Errorf("last message = %q, want 'a5'", snap[len(snap)-1].Content)
+	if snap[len(snap)-1].Content != longMsg {
+		t.Errorf("last message = %q, want %q", snap[len(snap)-1].Content, longMsg)
 	}
 	// Trigger reset so we don't immediately re-compact.
 	if a.lastInputTokens != 0 {
@@ -210,12 +211,12 @@ func TestRun_CompactsBetweenTurns(t *testing.T) {
 	}
 	a := New(f, "m")
 	a.CompactThreshold = 100
-	a.lastInputTokens = 500 // prior turn was big → should compact before this Run
 
-	// Seed a long prior history (6 user turns).
+	// Seed a long prior history whose estimated size exceeds the threshold.
+	longMsg := strings.Repeat("x ", 500) // ~250 tokens each
 	for i := 0; i < 6; i++ {
-		a.History.Append(NewUserMessage(fmt.Sprintf("u%d", i)))
-		a.History.Append(NewAssistantMessage(fmt.Sprintf("a%d", i)))
+		a.History.Append(NewUserMessage(longMsg))
+		a.History.Append(NewAssistantMessage(longMsg))
 	}
 
 	defs := []ToolDefinition{{Name: "terminal"}}
