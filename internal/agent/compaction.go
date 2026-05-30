@@ -107,20 +107,24 @@ Focus on:
 
 Begin your response NOW. Remember: PURE TEXT only, starting with <topics> then <summary>.`
 
-// maybeCompact summarizes the older portion of history when the most recent
-// context size (lastInputTokens) crossed CompactThreshold. It runs only at a
-// safe boundary — between turns, splitting on a plain user message — so
-// tool_use/tool_result pairs are never severed. A nil return means either
+// maybeCompact summarizes the older portion of history when the estimated
+// total context size (from History.Snapshot) crosses CompactThreshold. It runs
+// only at a safe boundary — between turns, splitting on a plain user message —
+// so tool_use/tool_result pairs are never severed. A nil return means either
 // "compaction disabled / not needed" or "compacted successfully"; an error
 // means the summarization side-call failed (the caller logs and proceeds with
 // uncompacted history rather than aborting the turn).
 func (a *Agent) maybeCompact(ctx context.Context) error {
 	trigger := a.compactTriggerTokens()
-	if trigger <= 0 || a.lastInputTokens < trigger {
+	if trigger <= 0 {
 		return nil
 	}
 
 	msgs := a.History.Snapshot()
+	if estimateMessages(msgs) < trigger {
+		return nil
+	}
+
 	split := safeSplitIndex(msgs, compactKeepTurns)
 	if split <= 0 {
 		return nil // not enough complete turns to safely compact yet
