@@ -10,12 +10,12 @@ func TestScannerLineReader_PrintsPrompt(t *testing.T) {
 	var out bytes.Buffer
 	r := newScannerLineReader(strings.NewReader("hi\n"), &out)
 
-	line, ok := r.ReadLine("you> ")
+	line, ok := r.ReadLine("> ")
 	if !ok || line != "hi" {
 		t.Fatalf("ReadLine = (%q, %v); want (\"hi\", true)", line, ok)
 	}
-	if got := out.String(); got != "you> " {
-		t.Errorf("prompt = %q; want %q", got, "you> ")
+	if got := out.String(); got != "> " {
+		t.Errorf("prompt = %q; want %q", got, "> ")
 	}
 }
 
@@ -48,12 +48,12 @@ func TestSeededLineReader_SeedThenDelegates(t *testing.T) {
 	inner := newScannerLineReader(strings.NewReader("next\n"), &out)
 	r := &seededLineReader{seed: seed, inner: inner}
 
-	got, ok := r.ReadLine("you> ")
+	got, ok := r.ReadLine("> ")
 	if !ok || got != seed {
 		t.Fatalf("first ReadLine = (%q, %v); want the full multi-line seed", got, ok)
 	}
 	// Second call delegates to the inner scanner.
-	got, ok = r.ReadLine("you> ")
+	got, ok = r.ReadLine("> ")
 	if !ok || got != "next" {
 		t.Fatalf("second ReadLine = (%q, %v); want (\"next\", true) from inner", got, ok)
 	}
@@ -67,11 +67,11 @@ func TestReadPromptLine_SingleLine(t *testing.T) {
 	var out bytes.Buffer
 	r := newScannerLineReader(strings.NewReader("hello\n"), &out)
 
-	got, ok := readPromptLine(r, "you> ", "... ")
+	got, ok := readPromptLine(r, "> ", "... ")
 	if !ok || got != "hello" {
 		t.Errorf("got = (%q, %v); want (\"hello\", true)", got, ok)
 	}
-	if !strings.Contains(out.String(), "you> ") {
+	if !strings.Contains(out.String(), "> ") {
 		t.Errorf("expected primary prompt; got %q", out.String())
 	}
 	if strings.Contains(out.String(), "... ") {
@@ -85,7 +85,7 @@ func TestReadPromptLine_BackslashContinuation(t *testing.T) {
 	in := "first\\\nsecond\\\nthird\n"
 	r := newScannerLineReader(strings.NewReader(in), &out)
 
-	got, ok := readPromptLine(r, "you> ", "... ")
+	got, ok := readPromptLine(r, "> ", "... ")
 	if !ok {
 		t.Fatal("ReadPromptLine ok=false")
 	}
@@ -94,7 +94,7 @@ func TestReadPromptLine_BackslashContinuation(t *testing.T) {
 		t.Errorf("got = %q; want %q", got, want)
 	}
 	prompts := out.String()
-	if !strings.Contains(prompts, "you> ") {
+	if !strings.Contains(prompts, "> ") {
 		t.Errorf("missing primary prompt; got %q", prompts)
 	}
 	if strings.Count(prompts, "... ") != 2 {

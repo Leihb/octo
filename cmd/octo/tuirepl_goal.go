@@ -105,7 +105,7 @@ func (m *tuiModel) startGoalPlan(goal string) tea.Cmd {
 		prog.Send(goalPlannedMsg{task: task, err: err})
 	}()
 	return tea.Batch(
-		tea.Println(promptStyle.Render("you> ")+"/goal "+goal),
+		tea.Println(promptStyle.Render("> ")+"/goal "+goal),
 		tea.Println(noticeStyle.Render("Planning…")),
 		tickCmd(),
 	)
