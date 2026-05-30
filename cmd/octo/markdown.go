@@ -12,6 +12,7 @@ import (
 // formatting glitch.
 type markdownRenderer struct {
 	width int
+	style string // "dark" or "light"; empty defaults to dark
 	r     *glamour.TermRenderer
 }
 
@@ -26,7 +27,11 @@ func (m *markdownRenderer) render(src string, width int) string {
 		w = 80
 	}
 	if m.r == nil || m.width != w {
-		r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(w))
+		style := m.style
+		if style == "" {
+			style = "dark"
+		}
+		r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(w))
 		if err != nil {
 			return strings.TrimRight(src, "\n")
 		}
