@@ -53,12 +53,12 @@ func TestRunTurn_PrependsIdleBgNote(t *testing.T) {
 	}
 }
 
-// TestTUI_BgExitMsgShowsNotice confirms an async background-exit message renders
-// a scrollback notice (a non-nil print command) rather than being dropped.
+// TestTUI_BgExitMsgShowsNotice confirms an async background-exit message is
+// appended to the scrollback buffer.
 func TestTUI_BgExitMsgShowsNotice(t *testing.T) {
 	m := newTestModel()
-	_, cmd := m.Update(bgExitMsg{e: tools.BgExit{ID: "bg_1", Command: "go test ./...", Status: "exited: 0"}})
-	if cmd == nil {
-		t.Fatal("bgExitMsg should produce a scrollback notice command")
+	m.Update(bgExitMsg{e: tools.BgExit{ID: "bg_1", Command: "go test ./...", Status: "exited: 0"}})
+	if len(m.scrollback) == 0 {
+		t.Fatal("bgExitMsg should append a scrollback notice")
 	}
 }

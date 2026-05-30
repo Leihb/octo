@@ -29,8 +29,11 @@ func TestTUI_SlashInfoCommandsDontStartTurn(t *testing.T) {
 		if m.turnRunning {
 			t.Errorf("%s should not start a turn", cmd)
 		}
-		if cmdFn == nil {
-			t.Errorf("%s should return a render Cmd", cmd)
+		if cmdFn != nil {
+			t.Errorf("%s should not return a Cmd (content goes to scrollback)", cmd)
+		}
+		if len(m.scrollback) == 0 {
+			t.Errorf("%s should append to scrollback", cmd)
 		}
 	}
 }
@@ -65,8 +68,11 @@ func TestTUI_GoalHelpDoesNotStartTurn(t *testing.T) {
 		if m.turnRunning {
 			t.Errorf("/goal %q should print usage, not start work", arg)
 		}
-		if cmd == nil {
-			t.Errorf("/goal %q should return a usage Cmd", arg)
+		if cmd != nil {
+			t.Errorf("/goal %q should not return a Cmd (content goes to scrollback)", arg)
+		}
+		if len(m.scrollback) == 0 {
+			t.Errorf("/goal %q should append usage to scrollback", arg)
 		}
 	}
 }
@@ -133,16 +139,16 @@ func TestTUI_GoalDoneInterruptedReleasesSession(t *testing.T) {
 
 func TestTUI_GoalCancelledReleasesSession(t *testing.T) {
 	// Declining the confirm modal routes goalCancelledMsg through Update,
-	// which must release the session and print a resume hint.
+	// which must release the session and append a resume hint to scrollback.
 	m := newTestModel()
 	m.turnRunning = true
 	task := &taskgraph.Task{ID: "20260529-120000-abcd1234", Goal: "g", Status: taskgraph.TaskPending}
-	_, cmd := m.Update(goalCancelledMsg{task: task})
+	m.Update(goalCancelledMsg{task: task})
 	if m.turnRunning {
 		t.Error("cancelling a planned goal must release the session")
 	}
-	if cmd == nil {
-		t.Error("expected a resume-hint notice Cmd")
+	if len(m.scrollback) == 0 {
+		t.Error("expected a resume-hint notice in scrollback")
 	}
 }
 
@@ -152,8 +158,11 @@ func TestTUI_GoalResumeMissingID(t *testing.T) {
 	if m.turnRunning {
 		t.Error("/goal resume with no id should print usage, not start work")
 	}
-	if cmd == nil {
-		t.Error("expected a usage Cmd")
+	if cmd != nil {
+		t.Error("should not return a Cmd (content goes to scrollback)")
+	}
+	if len(m.scrollback) == 0 {
+		t.Error("expected usage in scrollback")
 	}
 }
 
@@ -169,8 +178,11 @@ func TestTUI_GoalResumeUnknownID(t *testing.T) {
 	if m.turnRunning {
 		t.Error("an unresolvable id must not start a run")
 	}
-	if cmd == nil {
-		t.Error("expected an error notice Cmd")
+	if cmd != nil {
+		t.Error("should not return a Cmd (content goes to scrollback)")
+	}
+	if len(m.scrollback) == 0 {
+		t.Error("expected an error notice in scrollback")
 	}
 }
 

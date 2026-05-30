@@ -37,16 +37,19 @@ type goalDoneMsg struct {
 func (m *tuiModel) dispatchGoal(args string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(args)
 	if len(fields) == 0 || strings.ToLower(fields[0]) == "help" {
-		return m, tea.Println(goalUsage())
+		m.pushScrollback(goalUsage())
+		return m, nil
 	}
 	switch strings.ToLower(fields[0]) {
 	case "list", "ls":
 		var b bytes.Buffer
 		runTaskList(nil, &b, &b)
-		return m, tea.Println(strings.TrimRight(b.String(), "\n"))
+		m.pushScrollback(strings.TrimRight(b.String(), "\n"))
+		return m, nil
 	case "resume":
 		if len(fields) < 2 {
-			return m, tea.Println(noticeStyle.Render("Usage: /goal resume <id>"))
+			m.pushScrollback(noticeStyle.Render("Usage: /goal resume <id>"))
+			return m, nil
 		}
 		return m.goalResume(fields[1])
 	default:
@@ -104,10 +107,9 @@ func (m *tuiModel) startGoalPlan(goal string) tea.Cmd {
 		task, err := store.Create(goal, subs)
 		prog.Send(goalPlannedMsg{task: task, err: err})
 	}()
-	return tea.Batch(
-		tea.Println(promptStyle.Render("> ")+"/goal "+goal+"\n"+noticeStyle.Render("Planning…")),
-		tickCmd(),
-	)
+	m.pushScrollback(promptStyle.Render("> ") + "/goal " + goal)
+	m.pushScrollback(noticeStyle.Render("Planning…"))
+	return tickCmd()
 }
 
 // onGoalPlanned renders the planned DAG and opens a confirm modal. A one-shot
@@ -117,12 +119,13 @@ func (m *tuiModel) onGoalPlanned(msg goalPlannedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.turnRunning = false
 		m.cancelTurn = nil
-		return m, tea.Println(errorStyle.Render("goal: " + msg.err.Error()))
+		m.pushScrollback(errorStyle.Render("goal: " + msg.err.Error()))
+		return m, nil
 	}
 
 	var b bytes.Buffer
 	printPlannedDAG(&b, msg.task)
-	planLine := tea.Println(strings.TrimRight(b.String(), "\n"))
+	m.pushScrollback(strings.TrimRight(b.String(), "\n"))
 
 	ch := make(chan UserResponse, 1)
 	m.openModal(askMsg{
@@ -144,7 +147,7 @@ func (m *tuiModel) onGoalPlanned(msg goalPlannedMsg) (tea.Model, tea.Cmd) {
 		}
 		prog.Send(goalRunMsg{task: task})
 	}()
-	return m, planLine
+	return m, nil
 }
 
 // startGoalRun drives the scheduler in the background. Scheduler progress is
@@ -172,10 +175,8 @@ func (m *tuiModel) startGoalRun(taskID string) tea.Cmd {
 		task, _ := store.Get(taskID)
 		prog.Send(goalDoneMsg{task: task, err: runErr})
 	}()
-	return tea.Batch(
-		tea.Println(noticeStyle.Render("Running…")),
-		tickCmd(),
-	)
+	m.pushScrollback(noticeStyle.Render("Running…"))
+	return tickCmd()
 }
 
 // onGoalDone reports the final task state and releases the session.
@@ -206,7 +207,7 @@ func (m *tuiModel) onGoalDone(msg goalDoneMsg) (tea.Model, tea.Cmd) {
 		b.WriteString(noticeStyle.Render("Goal " + msg.task.ShortID() + " finished."))
 	}
 	if b.Len() > 0 {
-		return m, tea.Println(b.String())
+		m.pushScrollback(b.String())
 	}
 	return m, nil
 }
@@ -216,20 +217,21 @@ func (m *tuiModel) onGoalDone(msg goalDoneMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) goalResume(idArg string) (tea.Model, tea.Cmd) {
 	store, err := taskgraph.NewStore()
 	if err != nil {
-		return m, tea.Println(errorStyle.Render("goal: " + err.Error()))
+		m.pushScrollback(errorStyle.Render("goal: " + err.Error()))
+		return m, nil
 	}
 	id, err := store.ResolveID(idArg)
 	if err != nil {
-		return m, tea.Println(errorStyle.Render("goal: " + err.Error() + "  (try /goal list)"))
+		m.pushScrollback(errorStyle.Render("goal: " + err.Error() + "  (try /goal list)"))
+		return m, nil
 	}
 	t, err := store.Update(id, resetForResume)
 	if err != nil {
-		return m, tea.Println(errorStyle.Render("goal: " + err.Error()))
+		m.pushScrollback(errorStyle.Render("goal: " + err.Error()))
+		return m, nil
 	}
-	return m, tea.Batch(
-		tea.Println(noticeStyle.Render(fmt.Sprintf("Resuming %s — re-running pending subtasks…", t.ShortID()))),
-		m.startGoalRun(t.ID),
-	)
+	m.pushScrollback(noticeStyle.Render(fmt.Sprintf("Resuming %s — re-running pending subtasks…", t.ShortID())))
+	return m, m.startGoalRun(t.ID)
 }
 
 // teaScrollbackWriter adapts the scheduler's io.Writer progress output into

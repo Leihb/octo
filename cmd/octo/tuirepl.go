@@ -31,7 +31,7 @@ func runTUI(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	m := newTUIModel(cfg)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
@@ -214,6 +214,14 @@ type tuiModel struct {
 	// tools suppress their started line, so without this they'd show nothing
 	// until completion.)
 	running *runningTool
+
+	// scrollback holds committed transcript lines (user messages, assistant
+	// text, tool cards, notices) rendered inside the alt-screen below the banner.
+	// On exit the buffer is dumped back to the main screen so history survives.
+	scrollback []string
+
+	// height is the terminal height in cells, updated by WindowSizeMsg.
+	height int
 }
 
 // runningTool is the live indicator state for an in-flight card tool.
@@ -285,17 +293,17 @@ func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 	// transcript — except a degraded background-notice "turn", which already
 	// surfaced as a bg notice and isn't user input. Either way, start the
 	// animation ticker for the spinner + elapsed clock.
-	var echoCmd tea.Cmd
 	if echo != "" && !strings.HasPrefix(echo, "<system-reminder>") {
-		echoCmd = tea.Println(userEchoStyle.Render("> ") + echo)
+		m.pushScrollback(userEchoStyle.Render("> ") + echo)
 	}
-	return tea.Batch(echoCmd, tickCmd())
+	return tickCmd()
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 		m.ti.Width = msg.Width - 4 // account for border + padding
 		return m, nil
 
@@ -319,54 +327,39 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEvent(msg.ev)
 
 	case noticeMsg:
-		return m, tea.Println(noticeStyle.Render(msg.text))
+		m.pushScrollback(noticeStyle.Render(msg.text))
+		return m, nil
 
 	case bgExitMsg:
 		// Async background-process completion: show a one-line scrollback notice
-		// (the full output rode into the conversation via Steer). Safe to print
-		// mid-turn — it's just another committed line.
-		return m, tea.Println(noticeStyle.Render(fmt.Sprintf(
+		// (the full output rode into the conversation via Steer).
+		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
 			"↳ %s (%s) %s", msg.e.ID, truncate1Line(msg.e.Command), msg.e.Status)))
+		return m, nil
 
 	case subAgentNoteMsg:
 		// Async sub-agent completion: show a one-line scrollback notice (the
-		// full result rode into the conversation via Steer). Safe to print
-		// mid-turn.
+		// full result rode into the conversation via Steer).
 		label := "completed"
 		if msg.ev.Kind == "message_reply" {
 			label = "replied"
 		}
-		return m, tea.Println(noticeStyle.Render(fmt.Sprintf(
+		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
 			"↳ sub-agent %s (%s) %s", msg.ev.AgentID, truncate1Line(msg.ev.Description), label)))
+		return m, nil
 
 	case turnEndedMsg:
 		// Flush any trailing assistant block (markdown-rendered); then render
-		// the cache/error footer. All lines are merged into a single tea.Println
-		// because tea.Batch runs commands concurrently and their output order is
-		// undefined — this was causing the cache line to appear before the
-		// flushed assistant text.
-		var b strings.Builder
+		// the cache/error footer.
 		if s, ok := m.flushTextString(); ok {
-			b.WriteString(s)
+			m.pushScrollback(s)
 		}
 		if msg.err != nil && msg.err != context.Canceled {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(errorStyle.Render("error: " + msg.err.Error()))
+			m.pushScrollback(errorStyle.Render("error: " + msg.err.Error()))
 		} else if msg.err == context.Canceled {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(noticeStyle.Render("^C interrupted"))
+			m.pushScrollback(noticeStyle.Render("^C interrupted"))
 		} else if c := cacheLine(m.cfg.verbosity, msg.reply); c != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(c)
-		}
-		if b.Len() > 0 {
-			return m, tea.Println(b.String())
+			m.pushScrollback(c)
 		}
 		return m, nil
 
@@ -386,9 +379,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case goalCancelledMsg:
 		m.turnRunning = false
 		m.cancelTurn = nil
-		return m, tea.Println(noticeStyle.Render(fmt.Sprintf(
+		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
 			"Cancelled. Planned as %s — run later with /goal resume %s (or octo goal run %s).",
 			msg.task.ShortID(), msg.task.ShortID(), msg.task.ShortID())))
+		return m, nil
 
 	case goalDoneMsg:
 		return m.onGoalDone(msg)
@@ -459,7 +453,8 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 				m.inputHistory = append(m.inputHistory, line)
 			}
 		}
-		return tea.Println(userEchoStyle.Render("> ") + ev.Text)
+		m.pushScrollback(userEchoStyle.Render("> ") + ev.Text)
+		return nil
 	}
 	return nil
 }
@@ -487,7 +482,8 @@ func (m *tuiModel) appendText(text string) tea.Cmd {
 		complete := buf[:idx]
 		m.partial.Reset()
 		m.partial.WriteString(buf[idx+1:])
-		return tea.Println(complete)
+		m.pushScrollback(complete)
+		return nil
 	}
 
 	commit, rest := splitCommittableMarkdown(m.partial.String())
@@ -496,7 +492,8 @@ func (m *tuiModel) appendText(text string) tea.Cmd {
 	}
 	m.partial.Reset()
 	m.partial.WriteString(rest)
-	return tea.Println(m.md.render(commit, m.width))
+	m.pushScrollback(m.md.render(commit, m.width))
+	return nil
 }
 
 // flushText commits whatever assistant text is still buffered (the final or
@@ -507,13 +504,13 @@ func (m *tuiModel) flushText() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return tea.Println(s)
+	m.pushScrollback(s)
+	return nil
 }
 
 // flushTextString returns the buffered assistant text (rendered through glamour
 // unless --plain) and true when there was pending text. Used internally when
-// multiple lines must be emitted in strict order — the caller batches them into
-// a single tea.Println instead of tea.Batch which runs commands concurrently.
+// multiple lines must be emitted in strict order.
 func (m *tuiModel) flushTextString() (string, bool) {
 	p := m.partial.String()
 	if p == "" {
@@ -526,17 +523,19 @@ func (m *tuiModel) flushTextString() (string, bool) {
 	return m.md.render(p, m.width), true
 }
 
-// commitToolLine flushes any in-progress text, then prints the tool line/card.
-// The two lines are merged into a single tea.Println because tea.Batch runs
-// commands concurrently and their output order is undefined.
+// commitToolLine flushes any in-progress text, then appends the tool line/card
+// to the scrollback.
 func (m *tuiModel) commitToolLine(line string) tea.Cmd {
-	var b strings.Builder
 	if s, ok := m.flushTextString(); ok {
-		b.WriteString(s)
-		b.WriteByte('\n')
+		m.pushScrollback(s)
 	}
-	b.WriteString(line)
-	return tea.Println(b.String())
+	m.pushScrollback(line)
+	return nil
+}
+
+// pushScrollback appends a line to the internal scrollback buffer.
+func (m *tuiModel) pushScrollback(line string) {
+	m.scrollback = append(m.scrollback, line)
 }
 
 func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
@@ -553,13 +552,12 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 
 	// Degrade-to-queue: a steer that never hit a tool-batch boundary runs as
 	// the next turn, ahead of explicitly-queued items (design §8).
-	var cmds []tea.Cmd
 	if s := m.a.DrainSteer(); s != "" {
 		// Steer was never injected into a tool_result — show it now so the
 		// user sees it before the degraded turn starts, and add it to
 		// inputHistory so ↑ can recall it for re-editing.
 		for _, line := range strings.Split(s, "\n\n") {
-			cmds = append(cmds, tea.Println(userEchoStyle.Render("> ")+line))
+			m.pushScrollback(userEchoStyle.Render("> ") + line)
 			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
 				m.inputHistory = append(m.inputHistory, line)
 			}
@@ -571,11 +569,7 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 	if len(m.queue) > 0 {
 		next := m.queue[0]
 		m.queue = m.queue[1:]
-		cmds = append(cmds, m.startTurnEcho(next.text, "")) // echo already shown above
-		return m, tea.Batch(cmds...)
-	}
-	if len(cmds) > 0 {
-		return m, tea.Batch(cmds...)
+		return m, m.startTurnEcho(next.text, "") // echo already shown above
 	}
 	return m, nil
 }
