@@ -109,6 +109,8 @@ func Banner(version, model, cwd string, width int) string {
 
 	sep := strings.Repeat("─", width)
 	b.WriteString(bannerSepStyle.Render(sep))
+	b.WriteByte('\n')
+	b.WriteString(bannerSubStyle.Render("Enter send · /exit quit · Ctrl+D quit"))
 	return b.String()
 }
 

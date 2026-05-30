@@ -436,12 +436,12 @@ func (m *tuiModel) renderStatusBar() string {
 		segs = append(segs, [2]string{"elapsed", time.Since(m.turnStart).Round(time.Second).String()})
 	}
 
-	hint := "Enter send · /exit quit · Ctrl+D quit"
+	var hint string
 	if m.turnRunning {
 		hint = "Enter steer · Alt+Enter queue · Esc interrupt"
-	}
-	if len(m.queue) > 0 {
-		hint += " · Ctrl+X unqueue"
+		if len(m.queue) > 0 {
+			hint += " · Ctrl+X unqueue"
+		}
 	}
 	return tui.StatusBar(segs, hint, m.width)
 }
