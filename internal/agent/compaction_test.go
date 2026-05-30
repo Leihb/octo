@@ -64,16 +64,31 @@ func TestSafeSplitIndex(t *testing.T) {
 }
 
 func TestContextWindow(t *testing.T) {
-	if got := contextWindow("claude-haiku-4-5-20251001"); got != 200_000 {
-		t.Errorf("claude window = %d, want 200000", got)
+	if got := contextWindow("claude-haiku-4-5-20251001"); got != 256_000 {
+		t.Errorf("claude window = %d, want 256000", got)
 	}
-	if got := contextWindow("k2.6"); got != defaultContextWindow {
+	if got := contextWindow("k2.6"); got != 256_000 {
+		t.Errorf("kimi k2.6 window = %d, want 256000", got)
+	}
+	if got := contextWindow("deepseek-v4-pro"); got != 1_000_000 {
+		t.Errorf("deepseek-v4-pro window = %d, want 1000000", got)
+	}
+	if got := contextWindow("qwen-3.7-max"); got != 1_000_000 {
+		t.Errorf("qwen-3.7-max window = %d, want 1000000", got)
+	}
+	if got := contextWindow("gpt-5.5"); got != 1_000_000 {
+		t.Errorf("gpt-5.5 window = %d, want 1000000", got)
+	}
+	if got := contextWindow("gemini-3.5-flash"); got != 1_000_000 {
+		t.Errorf("gemini-3.5-flash window = %d, want 1000000", got)
+	}
+	if got := contextWindow("unknown-model-xyz"); got != defaultContextWindow {
 		t.Errorf("unknown model window = %d, want %d (conservative default)", got, defaultContextWindow)
 	}
 }
 
 func TestCompactTriggerTokens(t *testing.T) {
-	a := New(&summarizeFake{}, "k2.6") // unknown model → default window
+	a := New(&summarizeFake{}, "unknown-model-xyz") // unknown model → default window
 
 	a.CompactThreshold = -1
 	if got := a.compactTriggerTokens(); got != 0 {
@@ -96,7 +111,7 @@ func TestCompactTriggerTokens(t *testing.T) {
 // left at 0, a context past the window-relative trigger compacts automatically.
 func TestMaybeCompact_AutoDefaultTriggers(t *testing.T) {
 	f := &summarizeFake{summary: "S"}
-	a := New(f, "k2.6") // CompactThreshold defaults to 0 (auto)
+	a := New(f, "unknown-model-xyz") // CompactThreshold defaults to 0 (auto), unknown model → default window
 	trigger := int(float64(defaultContextWindow) * compactThresholdFraction)
 	// Build a history whose estimated token count exceeds the trigger.
 	longMsg := strings.Repeat("x ", 500) // ~250 tokens each

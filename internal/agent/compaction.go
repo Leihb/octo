@@ -28,23 +28,110 @@ const defaultContextWindow = 128_000
 func contextWindow(model string) int {
 	m := strings.ToLower(model)
 	switch {
+	// ── Anthropic Claude ──
+	case strings.Contains(m, "claude-opus-4.8") || strings.Contains(m, "claude-opus-4"):
+		return 1_000_000
+	case strings.Contains(m, "claude-sonnet-4") || strings.Contains(m, "claude-haiku-4"):
+		return 256_000
+	case strings.Contains(m, "claude-4"):
+		return 256_000
 	case strings.Contains(m, "claude-3-5"):
 		return 200_000
 	case strings.Contains(m, "claude-3"):
 		return 200_000
-	case strings.Contains(m, "claude-opus-4"):
-		return 200_000
-	case strings.Contains(m, "claude-sonnet-4"):
-		return 200_000
-	case strings.Contains(m, "claude-haiku-4"):
-		return 200_000
 	case strings.Contains(m, "claude"):
-		// Claude 4.x and newer models with 256K window
+		return 256_000
+
+	// ── OpenAI GPT / O-series ──
+	case strings.Contains(m, "gpt-5.5") || strings.Contains(m, "gpt5.5"):
+		return 1_000_000
+	case strings.Contains(m, "gpt-5") || strings.Contains(m, "gpt5"):
 		return 256_000
 	case strings.Contains(m, "gpt-4o"):
 		return 128_000
 	case strings.Contains(m, "gpt-4"):
 		return 128_000
+	case strings.Contains(m, "o3") || strings.Contains(m, "o1") || strings.Contains(m, "o4"):
+		return 200_000
+
+	// ── Google Gemini ──
+	case strings.Contains(m, "gemini-3.5") || strings.Contains(m, "gemini3.5"):
+		return 1_000_000
+	case strings.Contains(m, "gemini-3.1") || strings.Contains(m, "gemini3.1"):
+		return 1_000_000
+	case strings.Contains(m, "gemini-3") || strings.Contains(m, "gemini3"):
+		return 1_000_000
+	case strings.Contains(m, "gemini-2.5") || strings.Contains(m, "gemini2.5"):
+		return 1_000_000
+	case strings.Contains(m, "gemini-2") || strings.Contains(m, "gemini2"):
+		return 1_000_000
+	case strings.Contains(m, "gemini-1.5") || strings.Contains(m, "gemini1.5"):
+		return 1_000_000
+	case strings.Contains(m, "gemini"):
+		return 1_000_000
+
+	// ── DeepSeek ──
+	case strings.Contains(m, "deepseek-v4-pro") || strings.Contains(m, "deepseekv4-pro"):
+		return 1_000_000
+	case strings.Contains(m, "deepseek-v4-flash") || strings.Contains(m, "deepseekv4-flash"):
+		return 1_000_000
+	case strings.Contains(m, "deepseek-v4") || strings.Contains(m, "deepseekv4"):
+		return 1_000_000
+	case strings.Contains(m, "deepseek-v3") || strings.Contains(m, "deepseekv3"):
+		return 64_000
+	case strings.Contains(m, "deepseek"):
+		return 64_000
+
+	// ── Moonshot Kimi ──
+	case strings.Contains(m, "kimi-k2.6") || strings.Contains(m, "kimik2.6") || strings.Contains(m, "k2.6"):
+		return 256_000
+	case strings.Contains(m, "kimi-k2") || strings.Contains(m, "kimik2") || strings.Contains(m, "k2"):
+		return 256_000
+	case strings.Contains(m, "kimi"):
+		return 200_000
+
+	// ── Alibaba Qwen ──
+	case strings.Contains(m, "qwen-3.7") || strings.Contains(m, "qwen3.7"):
+		return 1_000_000
+	case strings.Contains(m, "qwen-3") || strings.Contains(m, "qwen3"):
+		return 128_000
+	case strings.Contains(m, "qwen2.5") || strings.Contains(m, "qwen-2.5"):
+		return 128_000
+	case strings.Contains(m, "qwen2") || strings.Contains(m, "qwen-2"):
+		return 128_000
+	case strings.Contains(m, "qwen"):
+		return 32_000
+
+	// ── Meta Llama ──
+	case strings.Contains(m, "llama-3.3") || strings.Contains(m, "llama3.3"):
+		return 128_000
+	case strings.Contains(m, "llama-3.2") || strings.Contains(m, "llama3.2"):
+		return 128_000
+	case strings.Contains(m, "llama-3.1") || strings.Contains(m, "llama3.1"):
+		return 128_000
+	case strings.Contains(m, "llama-3") || strings.Contains(m, "llama3"):
+		return 8_000
+	case strings.Contains(m, "llama"):
+		return 4_000
+
+	// ── Mistral ──
+	case strings.Contains(m, "mistral-large") || strings.Contains(m, "mistral-small"):
+		return 128_000
+	case strings.Contains(m, "mistral"):
+		return 32_000
+
+	// ── Cohere ──
+	case strings.Contains(m, "command-r-plus") || strings.Contains(m, "command-r"):
+		return 128_000
+	case strings.Contains(m, "command"):
+		return 4_000
+
+	// ── 01.AI Yi ──
+	case strings.Contains(m, "yi-large") || strings.Contains(m, "yi-medium"):
+		return 32_000
+	case strings.Contains(m, "yi"):
+		return 16_000
+
 	default:
 		return defaultContextWindow
 	}
