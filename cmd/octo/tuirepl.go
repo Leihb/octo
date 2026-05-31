@@ -461,9 +461,6 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s := strings.Join(msgs, "\n\n")
 				for _, line := range strings.Split(s, "\n\n") {
 					m.println(userEchoStyle.Render("> ") + line)
-					if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
-						m.inputHistory = append(m.inputHistory, line)
-					}
 				}
 				m.queue = append([]pendingItem{{text: s}}, m.queue...)
 			}
@@ -702,9 +699,6 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 		s := strings.Join(msgs, "\n\n")
 		for _, line := range strings.Split(s, "\n\n") {
 			m.println(userEchoStyle.Render("> ") + line)
-			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
-				m.inputHistory = append(m.inputHistory, line)
-			}
 		}
 		m.queue = append([]pendingItem{{text: s}}, m.queue...)
 	}
