@@ -312,6 +312,7 @@ func TestTUI_SubmitSavesToHistory(t *testing.T) {
 
 func TestTUI_ScrollbackAutoFollowsDuringTurn(t *testing.T) {
 	m := newTestModel()
+	m.height = 30
 
 	// Pre-populate scrollback with enough lines to scroll.
 	for i := 0; i < 30; i++ {
@@ -319,16 +320,25 @@ func TestTUI_ScrollbackAutoFollowsDuringTurn(t *testing.T) {
 	}
 
 	// User scrolls up.
-	m.scrollOffset = 10
-	if m.scrollOffset != 10 {
-		t.Fatal("scrollOffset should be 10 after scrolling up")
+	m.scrollOffset = 5
+	if m.scrollOffset != 5 {
+		t.Fatal("scrollOffset should be 5 after scrolling up")
 	}
 
-	// New content arrives during a turn — should auto-reset to bottom.
+	// New content arrives during a turn — should NOT reset scrollOffset.
+	// The user's scrolled position is preserved.
 	m.turnRunning = true
 	m.pushScrollback("new content")
+	if m.scrollOffset != 5 {
+		t.Errorf("pushScrollback should preserve scrollOffset when user scrolled up, got %d", m.scrollOffset)
+	}
+
+	// When at bottom (scrollOffset=0), new content is naturally followed
+	// because View() start = len(scrollback) - available.
+	m.scrollOffset = 0
+	m.pushScrollback("another line")
 	if m.scrollOffset != 0 {
-		t.Errorf("pushScrollback during turn should reset scrollOffset to 0, got %d", m.scrollOffset)
+		t.Errorf("pushScrollback at bottom should keep scrollOffset 0, got %d", m.scrollOffset)
 	}
 }
 

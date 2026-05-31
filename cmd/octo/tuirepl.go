@@ -31,7 +31,7 @@ func runTUI(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	m := newTUIModel(cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
@@ -564,14 +564,12 @@ func (m *tuiModel) commitToolLine(line string) tea.Cmd {
 }
 
 // pushScrollback appends a line to the internal scrollback buffer.
-// If a turn is running, the view auto-follows by resetting scrollOffset to 0
-// so new content is always visible. When no turn is active, the scroll position
-// is preserved so the user can review history undisturbed.
+// When scrollOffset == 0 (view pinned to bottom), the View() start calculation
+// naturally follows new content because start = len(scrollback) - available.
+// When the user has scrolled up (scrollOffset > 0), their position is preserved
+// — use mouse wheel or trackpad to scroll back down.
 func (m *tuiModel) pushScrollback(line string) {
 	m.scrollback = append(m.scrollback, line)
-	if m.turnRunning {
-		m.scrollOffset = 0
-	}
 }
 
 func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
