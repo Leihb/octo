@@ -131,6 +131,12 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit()
 
 	case tea.KeyUp:
+		// If the cursor is not on the first display row, move up inside the
+		// textarea (line navigation). Otherwise browse input history.
+		if m.ta.Line() > 0 || m.ta.LineInfo().RowOffset > 0 {
+			m.ta.CursorUp()
+			return m, nil
+		}
 		if m.inputHistoryIdx+1 < len(m.inputHistory) {
 			m.inputHistoryIdx++
 			m.ta.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
@@ -140,6 +146,14 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyDown:
+		// If the cursor is not on the last display row, move down inside the
+		// textarea (line navigation). Otherwise browse input history.
+		li := m.ta.LineInfo()
+		lines := strings.Count(m.ta.Value(), "\n") + 1
+		if m.ta.Line() < lines-1 || li.RowOffset < li.Height-1 {
+			m.ta.CursorDown()
+			return m, nil
+		}
 		if m.inputHistoryIdx > 0 {
 			m.inputHistoryIdx--
 			m.ta.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
