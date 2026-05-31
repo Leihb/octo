@@ -303,7 +303,9 @@ func newTUIModel(cfg replConfig) *tuiModel {
 	if !tui.IsDark() {
 		style = "light"
 	}
-	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ta: ta, inputHistoryIdx: -1, md: markdownRenderer{style: style}}
+	m := &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ta: ta, inputHistoryIdx: -1, md: markdownRenderer{style: style}}
+	m.updateTextAreaHeight()
+	return m
 }
 
 func (m *tuiModel) Init() tea.Cmd {
@@ -358,7 +360,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ta.SetWidth(msg.Width - 4) // account for border + padding
-		m.ta.SetHeight(min(6, msg.Height/4))
+		m.updateTextAreaHeight()
 		return m, m.flushPrints()
 
 	case tea.KeyMsg:
