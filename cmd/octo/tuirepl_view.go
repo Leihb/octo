@@ -400,13 +400,14 @@ func (m *tuiModel) View() string {
 	if available < 0 {
 		available = 0
 	}
-	// Clamp scrollOffset first so start uses a valid value in this frame
-	// (previously clamped after start, causing one-frame-late correction).
+	// Clamp scrollOffset to valid range without mutating on every frame.
+	// Previously every View() call set scrollOffset = maxOffset (0 when
+	// content fits on one screen), destroying user scroll every frame.
 	maxOffset := len(m.scrollback) - available
 	if maxOffset < 0 {
 		maxOffset = 0
-	}
-	if m.scrollOffset > maxOffset {
+		m.scrollOffset = 0
+	} else if m.scrollOffset > maxOffset {
 		m.scrollOffset = maxOffset
 	}
 	start := 0
