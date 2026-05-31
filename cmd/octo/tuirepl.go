@@ -10,7 +10,7 @@ import (
 	"github.com/Leihb/octo-agent/internal/tools"
 	"github.com/Leihb/octo-agent/internal/tui"
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -23,7 +23,8 @@ import (
 //
 // Input modes while a turn runs (design §7):
 //   - Enter      → steer  (folded into the turn at the next tool-batch boundary)
-//   - Alt+Enter  → queue  (run as a fresh turn after this one finishes)
+//   - Alt+Enter  → newline (insert a line break in the input box)
+//   - Ctrl+Q     → queue  (run as a fresh turn after this one finishes)
 //   - Esc        → interrupt the current turn (queue survives)
 //   - Ctrl+C     → interrupt if a turn runs, else save & quit
 //   - Ctrl+D     → save & quit
@@ -169,8 +170,8 @@ type tuiModel struct {
 	// --plain (cfg.plain), where text commits as raw lines.
 	md markdownRenderer
 
-	// ti is the single-line text input (bubbles/textinput).
-	ti textinput.Model
+	// ta is the multi-line text input (bubbles/textarea).
+	ta textarea.Model
 
 	// inputHistory stores submitted lines for ↑/↓ recall.
 	inputHistory    []string
@@ -192,7 +193,7 @@ type tuiModel struct {
 	// the input back). Keyed by ToolID; entry removed on done/error.
 	toolInput map[string]map[string]any
 
-	// queue holds Alt+Enter messages to run as future turns (design §8/§10).
+	// queue holds Ctrl+Q messages to run as future turns (design §8/§10).
 	queue []pendingItem
 
 	// pendingSteer holds steer messages typed during a running turn that
@@ -250,25 +251,29 @@ type modalState struct {
 }
 
 func newTUIModel(cfg replConfig) *tuiModel {
-	ti := textinput.New()
-	ti.Prompt = ""
-	ti.Placeholder = "Ask anything…"
-	ti.Focus()
-	// Disable bubbles' built-in up/down (suggestion navigation) so we can use
-	// them for input-history recall instead.
-	ti.KeyMap.NextSuggestion = key.Binding{}
-	ti.KeyMap.PrevSuggestion = key.Binding{}
+	ta := textarea.New()
+	ta.Placeholder = "Ask anything…"
+	ta.Focus()
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	// Disable textarea's built-in newline on Enter so we can handle it
+	// ourselves (Enter = submit, Alt+Enter = insert newline).
+	ta.KeyMap.InsertNewline = key.Binding{}
+	// Disable up/down line navigation so we can use them for input-history
+	// recall instead.
+	ta.KeyMap.LineNext = key.Binding{}
+	ta.KeyMap.LinePrevious = key.Binding{}
 	style := "dark"
 	if !tui.IsDark() {
 		style = "light"
 	}
-	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1, md: markdownRenderer{style: style}}
+	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ta: ta, inputHistoryIdx: -1, md: markdownRenderer{style: style}}
 }
 
 func (m *tuiModel) Init() tea.Cmd {
 	return tea.Sequence(
 		tea.Println(tui.Banner("", m.a.Model, m.cwd, m.width)),
-		textinput.Blink,
+		textarea.Blink,
 	)
 }
 
@@ -312,30 +317,26 @@ func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	model, cmd := m.update(msg)
-	return model, tea.Batch(cmd, m.flushPrints())
-}
-
-func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.ti.Width = msg.Width - 4 // account for border + padding
-		return m, nil
+		m.ta.SetWidth(msg.Width - 4) // account for border + padding
+		m.ta.SetHeight(min(6, msg.Height/4))
+		return m, m.flushPrints()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
 	case turnStartedMsg:
-		return m, nil
+		return m, m.flushPrints()
 
 	case tickMsg:
 		// Animate while a turn runs OR while background processes are still
 		// going (so the live "background (N running)" panel keeps ticking even
 		// between turns); let the ticker die once both are quiet.
 		if !m.turnRunning && len(tools.RunningBackground()) == 0 {
-			return m, nil
+			return m, m.flushPrints()
 		}
 		m.spinnerFrame++
 		return m, tickCmd()
@@ -345,7 +346,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case noticeMsg:
 		m.println(noticeStyle.Render(msg.text))
-		return m, nil
+		return m, m.flushPrints()
 
 	case bgExitMsg:
 		// Async background-process completion: show a one-line scrollback notice
@@ -361,7 +362,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startTurnEcho(s, "")
 			}
 		}
-		return m, nil
+		return m, m.flushPrints()
 
 	case subAgentNoteMsg:
 		// Async sub-agent completion: show a one-line scrollback notice (the
@@ -379,7 +380,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startTurnEcho(s, "")
 			}
 		}
-		return m, nil
+		return m, m.flushPrints()
 
 	case turnEndedMsg:
 		// Flush any trailing assistant block (markdown-rendered); then render
@@ -394,14 +395,39 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if c := cacheLine(m.cfg.verbosity, msg.reply); c != "" {
 			m.println(c)
 		}
-		return m, nil
+		// On interrupt, eagerly reset turnRunning so background-process
+		// auto-turn (bgExitMsg) can fire immediately instead of waiting for
+		// turnFinishedMsg. The steer drain and dequeue still happen in
+		// handleTurnFinished when the goroutine actually returns.
+		if msg.err == context.Canceled {
+			m.turnRunning = false
+			m.running = nil
+			// Eagerly drain steer so a pending steer (or background-process
+			// notice that raced in via Steer) starts immediately rather than
+			// waiting for turnFinishedMsg.
+			if s := m.a.DrainSteer(); s != "" {
+				for _, line := range strings.Split(s, "\n\n") {
+					m.println(userEchoStyle.Render("> ") + line)
+					if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
+						m.inputHistory = append(m.inputHistory, line)
+					}
+				}
+				m.queue = append([]pendingItem{{text: s}}, m.queue...)
+			}
+			if len(m.queue) > 0 {
+				next := m.queue[0]
+				m.queue = m.queue[1:]
+				return m, tea.Sequence(m.flushPrints(), m.startTurnEcho(next.text, ""))
+			}
+		}
+		return m, m.flushPrints()
 
 	case turnFinishedMsg:
 		return m.handleTurnFinished()
 
 	case askMsg:
 		m.openModal(msg)
-		return m, nil
+		return m, m.flushPrints()
 
 	case goalPlannedMsg:
 		return m.onGoalPlanned(msg)
@@ -415,12 +441,12 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.println(noticeStyle.Render(fmt.Sprintf(
 			"Cancelled. Planned as %s — run later with /goal resume %s (or octo goal run %s).",
 			msg.task.ShortID(), msg.task.ShortID(), msg.task.ShortID())))
-		return m, nil
+		return m, m.flushPrints()
 
 	case goalDoneMsg:
 		return m.onGoalDone(msg)
 	}
-	return m, nil
+	return m, m.flushPrints()
 }
 
 // handleEvent commits streaming text and tool events to the scrollback,

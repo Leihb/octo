@@ -15,6 +15,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// min returns the smaller of a and b.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 var (
 	promptStyle       = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
 	noticeStyle       = lipgloss.NewStyle().Foreground(tui.ColMuted)
@@ -27,9 +35,6 @@ var (
 	pendingSteerStyle = lipgloss.NewStyle().Foreground(tui.ColMuted)
 )
 
-// wheelScrollLines is how many lines one wheel tick scrolls.  Larger than 1
-// so track-pad two-finger scrolling feels responsive (bubbletea delivers one
-// MouseWheel event per gesture tick, not per pixel).
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modal != nil {
 		return m.handleModalKey(msg)
@@ -54,14 +59,29 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Idle: clear the input line.
-		m.ti.Reset()
+		m.ta.Reset()
 		m.inputHistoryIdx = -1
+		return m, nil
+
+	case tea.KeyCtrlQ:
+		// Queue the current input to run as a future turn.
+		text := strings.TrimSpace(m.ta.Value())
+		if text == "" {
+			return m, nil
+		}
+		m.ta.Reset()
+		m.inputHistoryIdx = -1
+		if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != text {
+			m.inputHistory = append(m.inputHistory, text)
+		}
+		m.queue = append(m.queue, pendingItem{text: text})
+		m.println(queueStyle.Render("＋ queued: " + text))
 		return m, nil
 
 	case tea.KeyCtrlX:
 		// Cancel the most-recently queued message. The queue survives Esc
 		// (interrupt only stops the running turn), so this is the way to undo a
-		// mis-queued Alt+Enter; repeat to clear the queue.
+		// mis-queued Ctrl+Q; repeat to clear the queue.
 		if n := len(m.queue); n > 0 {
 			dropped := m.queue[n-1].text
 			m.queue = m.queue[:n-1]
@@ -87,43 +107,49 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		return m.submit(msg.Alt)
+		if msg.Alt {
+			// Alt+Enter inserts a newline into the textarea.
+			var cmd tea.Cmd
+			m.ta, cmd = m.ta.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return m, cmd
+		}
+		return m.submit()
 
 	case tea.KeyUp:
 		if m.inputHistoryIdx+1 < len(m.inputHistory) {
 			m.inputHistoryIdx++
-			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
-			m.ti.CursorEnd()
+			m.ta.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
+			m.ta.CursorEnd()
 		}
 		return m, nil
 
 	case tea.KeyDown:
 		if m.inputHistoryIdx > 0 {
 			m.inputHistoryIdx--
-			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
-			m.ti.CursorEnd()
+			m.ta.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
+			m.ta.CursorEnd()
 		} else if m.inputHistoryIdx == 0 {
 			m.inputHistoryIdx = -1
-			m.ti.Reset()
+			m.ta.Reset()
 		}
 		return m, nil
 	}
 
 	// Everything else (typing, left/right, backspace, word movement, etc.)
-	// is handled by bubbles/textinput.
+	// is handled by bubbles/textarea.
 	var cmd tea.Cmd
-	m.ti, cmd = m.ti.Update(msg)
+	m.ta, cmd = m.ta.Update(msg)
 	return m, cmd
 }
 
-// submit acts on Enter / Alt+Enter. Idle → start a turn. Running → steer (Enter)
-// or queue (Alt+Enter). Empty input is ignored.
-func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.ti.Value())
+// submit acts on Enter. Idle → start a turn. Running → steer. Empty input is
+// ignored.
+func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
+	text := strings.TrimSpace(m.ta.Value())
 	if text == "" {
 		return m, nil
 	}
-	m.ti.Reset()
+	m.ta.Reset()
 	m.inputHistoryIdx = -1
 	// Save to history for ↑/↓ recall (dedup consecutive identical lines).
 	if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != text {
@@ -139,12 +165,6 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 		return m, m.startTurn(text)
 	}
 
-	if alt {
-		// Queue: run as a future turn.
-		m.queue = append(m.queue, pendingItem{text: text})
-		m.println(queueStyle.Render("＋ queued: " + text))
-		return m, nil
-	}
 	// Steer: fold into the running turn at the next tool-batch boundary.
 	// Echo is deferred to EventSteerInjected (preserves chronological order
 	// with tool_result). A "pending steer" indicator is shown in the live
@@ -435,7 +455,7 @@ func (m *tuiModel) View() string {
 	return b.String()
 }
 func (m *tuiModel) renderInputBox() string {
-	return promptStyle.Render("> ") + m.ti.View()
+	return promptStyle.Render("> ") + m.ta.View()
 }
 
 // renderStatusBar renders the cwd / context% / permission / elapsed segments,
@@ -462,7 +482,7 @@ func (m *tuiModel) renderStatusBar() string {
 
 	var hint string
 	if m.turnRunning {
-		hint = "Enter steer · Alt+Enter queue · Esc interrupt"
+		hint = "Enter steer · Alt+Enter newline · Ctrl+Q queue · Esc interrupt"
 		if len(m.queue) > 0 {
 			hint += " · Ctrl+X unqueue"
 		}
