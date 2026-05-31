@@ -426,6 +426,12 @@ func (a *Agent) runLoop(
 			a.History.Append(NewUserMessage(m))
 		}
 
+		// Defensive check: ensure every tool_use block has a matching tool_result.
+		// This handles edge cases where compaction, overflow recovery, or an
+		// interrupted dispatchTools left orphaned tool_use blocks. Synthesizing
+		// error tool_results prevents Anthropic HTTP 400 errors.
+		a.ensureToolPairing()
+
 		reply, err := send(ctx, a.History.Snapshot())
 		if err != nil {
 			// Interrupt during the provider call: finalize cleanly rather than
@@ -513,21 +519,31 @@ func (a *Agent) runLoop(
 //   - last message is the unanswered user input → drop it (turn never happened)
 //   - last message is a tool_result (user role) → cap with an assistant note,
 //     so the next user turn doesn't produce two user messages in a row
-//   - last message is already an assistant turn → nothing to do
+//   - last message is an assistant(tool_use) without tool_result → synthesize
+//     error tool_results and cap with an assistant note
+//   - last message is already a plain assistant turn → nothing to do
 //
-// The synthesized tool_result blocks for interrupted tool calls are produced
-// by dispatchTools itself (cancelled executions become is_error results), so
-// every tool_use already has a matching tool_result by the time we get here.
+// The synthesized tool_result blocks for interrupted tool calls are normally
+// produced by dispatchTools itself (cancelled executions become is_error
+// results). This function handles the edge case where dispatchTools didn't
+// complete before the interrupt was detected.
 func (a *Agent) finishInterrupted(handler EventHandler) (Reply, error) {
 	msgs := a.History.Snapshot()
 	if n := len(msgs); n > 0 {
 		last := msgs[n-1]
-		if last.Role == RoleUser {
-			if hasToolResult(last) {
-				a.History.Append(NewAssistantMessage(interruptNote))
-			} else {
-				a.History.popLast()
+		switch {
+		case last.Role == RoleAssistant && hasToolUse(last):
+			// Orphaned assistant(tool_use) — dispatchTools didn't produce results.
+			// Synthesize error tool_results so the next send() doesn't 400.
+			results := synthesizeInterruptedToolResults(last.Blocks)
+			if len(results) > 0 {
+				a.History.Append(NewToolResultMessage(results))
 			}
+			a.History.Append(NewAssistantMessage(interruptNote))
+		case last.Role == RoleUser && hasToolResult(last):
+			a.History.Append(NewAssistantMessage(interruptNote))
+		case last.Role == RoleUser:
+			a.History.popLast()
 		}
 	}
 	reply := Reply{Content: interruptNote, StopReason: StopReasonInterrupted}
