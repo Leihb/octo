@@ -650,8 +650,15 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 	m.turnRunning = false
 	m.cancelTurn = nil
 	m.streaming = false
-	m.running = nil      // clear any live tool indicator (e.g. on interrupt)
-	m.pendingSteer = nil // clear pending steer display (drained or degraded)
+	m.running = nil // clear any live tool indicator (e.g. on interrupt)
+
+	// Steer messages that were drained into history during the turn should
+	// appear in the scrollback like regular user messages. Print them before
+	// clearing the pending display.
+	for _, s := range m.pendingSteer {
+		m.println(userEchoStyle.Render("> ") + s)
+	}
+	m.pendingSteer = nil
 
 	// Auto-save (history is well-formed even after an interrupt).
 	if !m.cfg.noSave {

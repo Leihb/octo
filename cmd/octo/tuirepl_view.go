@@ -457,8 +457,9 @@ func (m *tuiModel) View() string {
 
 	// Pending steer — show what the user typed mid-turn, indented right above
 	// the input box (Claude Code style: input上方，比普通消息多了一个indent).
-	// Does not enter the scrollback until drained via EventSteerInjected,
-	// preserving chronological order with tool_result.
+	// Once the agent loop drains the inbox these messages are printed to the
+	// scrollback in handleTurnFinished so they appear in the transcript like
+	// regular user messages.
 	if len(m.pendingSteer) > 0 {
 		for _, s := range m.pendingSteer {
 			b.WriteString(pendingSteerStyle.Render("  > ") + pendingSteerStyle.Render(s))
