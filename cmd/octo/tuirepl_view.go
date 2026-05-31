@@ -172,12 +172,11 @@ func (m *tuiModel) submit() (tea.Model, tea.Cmd) {
 		return m, m.startTurn(text)
 	}
 
-	// Steer: fold into the running turn at the next tool-batch boundary.
-	// Echo is deferred to EventSteerInjected (preserves chronological order
-	// with tool_result). A "pending steer" indicator is shown in the live
-	// View area below the scrollback for immediate visual feedback.
+	// Mid-turn input goes to the inbox. It will be drained into history at
+	// the start of the next loop iteration, before the LLM call, so the
+	// model sees it as a first-class user message.
 	m.pendingSteer = append(m.pendingSteer, text)
-	m.a.Steer(text)
+	m.a.Inbox.Enqueue(text)
 	return m, nil
 }
 

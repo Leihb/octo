@@ -72,8 +72,6 @@ func (u *UIController) handleEvent(ev agent.AgentEvent) {
 		u.onToolError(ev.ToolName, ev.Err, ev.Output)
 	case agent.EventTurnDone:
 		u.onTurnDone(ev.Reply)
-	case agent.EventSteerInjected:
-		// Steer is internal — don't forward to IM.
 	case agent.EventToolInputDelta:
 		// Tool input deltas are UI-only (web TUI) — suppress in IM.
 	}

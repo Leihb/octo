@@ -71,12 +71,12 @@ func runREPL(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	// Sub-agent manager: wire the onExit hook so completion notifications ride
-	// the same steer path as background-process notices. Register the manager
+	// the same inbox path as background-process notices. Register the manager
 	// globally so the built-in tools pick it up without per-instance injection.
 	if cfg.subAgentMgr != nil {
 		tools.SetDefaultSubAgentManager(cfg.subAgentMgr)
 		cfg.subAgentMgr.SetOnExit(func(ev tools.SubAgentNotification) {
-			a.Steer(formatSubAgentNote(ev))
+			a.Inbox.Enqueue(formatSubAgentNote(ev))
 		})
 		defer func() {
 			cfg.subAgentMgr.SetOnExit(nil)
@@ -85,12 +85,12 @@ func runREPL(cfg replConfig) int {
 		}()
 	}
 
-	// Background-completion notice: inject into the conversation via Steer so
-	// the model is told when a detached command finishes (drained at the next
-	// tool-batch boundary, or prepended to the next turn — see turncore.go).
+	// Background-completion notice: inject into the conversation via Inbox so
+	// the model is told when a detached command finishes (drained at the start
+	// of the next loop iteration — see agent.go runLoop).
 	// The plain path prints no async UI line (it would interleave with the
 	// synchronous render loop); the TUI path adds a scrollback notice on top.
-	tools.SetBackgroundOnExit(func(e tools.BgExit) { a.Steer(formatBgNote(e)) })
+	tools.SetBackgroundOnExit(func(e tools.BgExit) { a.Inbox.Enqueue(formatBgNote(e)) })
 	defer tools.SetBackgroundOnExit(nil)
 
 	// Startup banner — fully suppressed in quiet mode, expanded with
@@ -242,8 +242,8 @@ func runREPL(cfg replConfig) int {
 		var line string
 		var isAutoTurn bool
 
-		// Wait for either user input or a background-completion steer that
-		// arrived while we were idle. The steer path auto-triggers a turn so
+		// Wait for either user input or a background-completion notice that
+		// arrived while we were idle. The inbox path auto-triggers a turn so
 		// the model can react to the event without the user typing anything.
 		select {
 		case raw, ok := <-inputCh:
@@ -261,11 +261,14 @@ func runREPL(cfg replConfig) int {
 				done = true
 				continue
 			}
-		case <-idleSteerWait(a):
-			// Background process finished while idle. Drain the steer buffer
+		case <-idleInboxWait(a):
+			// Background process finished while idle. Drain the inbox
 			// and run an auto-turn so the model sees the notification.
-			line = a.DrainSteer()
-			isAutoTurn = true
+			msgs := a.Inbox.Drain()
+			if len(msgs) > 0 {
+				line = strings.Join(msgs, "\n\n")
+				isAutoTurn = true
+			}
 		}
 
 		if line == "" {
@@ -332,16 +335,16 @@ func runREPL(cfg replConfig) int {
 	return 0
 }
 
-// idleSteerWait returns a channel that receives a single value once a steer
-// message is pending on the agent. It polls every 200 ms so the select in
+// idleInboxWait returns a channel that receives a single value once a message
+// is pending in the agent's inbox. It polls every 200 ms so the select in
 // runREPL doesn't block indefinitely on user input when a background process
 // completes. The returned channel is closed after firing; callers should not
 // reuse it.
-func idleSteerWait(a *agent.Agent) <-chan struct{} {
+func idleInboxWait(a *agent.Agent) <-chan struct{} {
 	ch := make(chan struct{}, 1)
 	go func() {
 		for {
-			if a.HasPendingSteer() {
+			if a.Inbox.HasPending() {
 				ch <- struct{}{}
 				return
 			}

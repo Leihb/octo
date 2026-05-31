@@ -59,12 +59,12 @@ func runTUI(cfg replConfig) int {
 	tools.SetAsker(newREPLAsker(sink))
 
 	// Sub-agent manager: wire the onExit hook so completion notifications ride
-	// the same steer path as background-process notices, and send a TUI msg
+	// the same inbox path as background-process notices, and send a TUI msg
 	// for scrollback display.
 	if cfg.subAgentMgr != nil {
 		tools.SetDefaultSubAgentManager(cfg.subAgentMgr)
 		cfg.subAgentMgr.SetOnExit(func(ev tools.SubAgentNotification) {
-			cfg.a.Steer(formatSubAgentNote(ev))
+			cfg.a.Inbox.Enqueue(formatSubAgentNote(ev))
 			p.Send(subAgentNoteMsg{ev})
 		})
 		defer func() {
@@ -75,13 +75,12 @@ func runTUI(cfg replConfig) int {
 	}
 
 	// Background-process completion notifications. Fired from a process's
-	// waiter goroutine, so each path is goroutine-safe: Steer is mutex-guarded
-	// (folds the notice into the next tool-batch boundary or turn), and
-	// prog.Send marshals the scrollback notice onto the event loop. Without
-	// this a finished background command is invisible until the model polls
-	// terminal_output.
+	// waiter goroutine, so each path is goroutine-safe: Inbox.Enqueue is
+	// mutex-guarded, and prog.Send marshals the scrollback notice onto the
+	// event loop. Without this a finished background command is invisible
+	// until the model polls terminal_output.
 	tools.SetBackgroundOnExit(func(e tools.BgExit) {
-		cfg.a.Steer(formatBgNote(e))
+		cfg.a.Inbox.Enqueue(formatBgNote(e))
 		p.Send(bgExitMsg{e})
 	})
 	defer tools.SetBackgroundOnExit(nil)
@@ -376,15 +375,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case bgExitMsg:
 		// Async background-process completion: show a one-line scrollback notice
-		// (the full output rode into the conversation via Steer).
+		// (the full output rode into the conversation via Inbox).
 		m.println(noticeStyle.Render(fmt.Sprintf(
 			"↳ %s (%s) %s", msg.e.ID, truncate1Line(msg.e.Command), msg.e.Status)))
 		// Idle auto-turn: if no turn is running and nothing is queued, drain the
-		// steer buffer (which holds the full <system-reminder> notice) and start a
+		// inbox (which holds the full <system-reminder> notice) and start a
 		// turn so the model sees the completion immediately — matching the plain
-		// REPL's idleSteerWait behaviour (runREPL select on idleSteerWait).
+		// REPL's idleInboxWait behaviour.
 		if !m.turnRunning && len(m.queue) == 0 {
-			if s := m.a.DrainSteer(); s != "" {
+			if msgs := m.a.Inbox.Drain(); len(msgs) > 0 {
+				s := strings.Join(msgs, "\n\n")
 				return m, m.startTurnEcho(s, "")
 			}
 		}
@@ -399,10 +399,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.println(noticeStyle.Render(fmt.Sprintf(
 			"↳ sub-agent %s (%s) %s", msg.ev.AgentID, truncate1Line(msg.ev.Description), label)))
-		// Idle auto-turn: same logic as bgExitMsg — drain steer and trigger a
+		// Idle auto-turn: same logic as bgExitMsg — drain inbox and trigger a
 		// turn so the model sees the notification immediately.
 		if !m.turnRunning && len(m.queue) == 0 {
-			if s := m.a.DrainSteer(); s != "" {
+			if msgs := m.a.Inbox.Drain(); len(msgs) > 0 {
+				s := strings.Join(msgs, "\n\n")
 				return m, m.startTurnEcho(s, "")
 			}
 		}
@@ -423,15 +424,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// On interrupt, eagerly reset turnRunning so background-process
 		// auto-turn (bgExitMsg) can fire immediately instead of waiting for
-		// turnFinishedMsg. The steer drain and dequeue still happen in
+		// turnFinishedMsg. The inbox drain and dequeue still happen in
 		// handleTurnFinished when the goroutine actually returns.
 		if msg.err == context.Canceled {
 			m.turnRunning = false
 			m.running = nil
-			// Eagerly drain steer so a pending steer (or background-process
-			// notice that raced in via Steer) starts immediately rather than
+			// Eagerly drain inbox so a pending message (or background-process
+			// notice that raced in via Inbox) starts immediately rather than
 			// waiting for turnFinishedMsg.
-			if s := m.a.DrainSteer(); s != "" {
+			if msgs := m.a.Inbox.Drain(); len(msgs) > 0 {
+				s := strings.Join(msgs, "\n\n")
 				for _, line := range strings.Split(s, "\n\n") {
 					m.println(userEchoStyle.Render("> ") + line)
 					if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
@@ -527,21 +529,6 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 		}
 		return m.commitToolLine(toolErrStyle.Render(fmt.Sprintf("↳ %s ✗ — %s", ev.ToolName, truncate1Line(ev.Err))))
 
-	case agent.EventSteerInjected:
-		// Steer text is displayed at the exact moment it enters history,
-		// after the tool_result it was folded into. This preserves
-		// chronological order — the user sees their steer where the model
-		// actually receives it, not prematurely when they typed it.
-		// Also add to inputHistory so ↑ can recall each steer line.
-		// Clear the "pending steer" live indicator.
-		m.pendingSteer = nil
-		for _, line := range strings.Split(ev.Text, "\n\n") {
-			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
-				m.inputHistory = append(m.inputHistory, line)
-			}
-		}
-		m.println(userEchoStyle.Render("> ") + ev.Text)
-		return nil
 	}
 	return nil
 }
@@ -654,12 +641,10 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 		_ = m.cfg.session.Save()
 	}
 
-	// Degrade-to-queue: a steer that never hit a tool-batch boundary runs as
-	// the next turn, ahead of explicitly-queued items (design §8).
-	if s := m.a.DrainSteer(); s != "" {
-		// Steer was never injected into a tool_result — show it now so the
-		// user sees it before the degraded turn starts, and add it to
-		// inputHistory so ↑ can recall it for re-editing.
+	// Drain any inbox messages that weren't consumed during the turn and
+	// run them as the next turn, ahead of explicitly-queued items.
+	if msgs := m.a.Inbox.Drain(); len(msgs) > 0 {
+		s := strings.Join(msgs, "\n\n")
 		for _, line := range strings.Split(s, "\n\n") {
 			m.println(userEchoStyle.Render("> ") + line)
 			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
