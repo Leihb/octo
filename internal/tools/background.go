@@ -217,8 +217,18 @@ func (m *BackgroundManager) Start(command string, opts ...StartOption) (string, 
 		hook := m.onExit
 		m.mu.Unlock()
 		if hook != nil {
-			out, status, _ := p.readNew()
-			hook(BgExit{ID: p.id, Command: p.command, Status: status, NewOutput: out})
+			p.mu.Lock()
+			visible := p.visible
+			p.mu.Unlock()
+			// Only notify for processes that are visible as background tasks.
+			// Sync-started processes start invisible (visible=false); they are
+			// promoted to visible=true when they time out. If a sync process
+			// finishes before the timeout, it was never a background task and
+			// its result was already returned synchronously — no notification.
+			if visible {
+				out, status, _ := p.readNew()
+				hook(BgExit{ID: p.id, Command: p.command, Status: status, NewOutput: out})
+			}
 		}
 	}()
 

@@ -76,3 +76,78 @@ func TestBackgroundManager_NoHookByDefault(t *testing.T) {
 		t.Errorf("output = %q, want 'plain'", out)
 	}
 }
+
+// TestBackgroundManager_OnExitNotFiredForInvisibleProcess verifies that a
+// sync-started process which finishes *before* the timeout (and therefore
+// never gets Promoted to visible) does NOT fire the onExit hook. This
+// prevents a spurious "background finished" system-reminder for a command
+// whose result was already returned synchronously.
+func TestBackgroundManager_OnExitNotFiredForInvisibleProcess(t *testing.T) {
+	m := NewBackgroundManager()
+
+	fired := make(chan BgExit, 1)
+	m.SetOnExit(func(e BgExit) {
+		select {
+		case fired <- e:
+		default:
+		}
+	})
+
+	// Start invisible (visible=false), exactly like the sync path does.
+	id, err := m.Start("echo sync-done", WithVisible(false))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Wait for the process to finish.
+	waitFor(t, "process to exit", func() bool {
+		_, s, f, _ := m.Read(id)
+		return f && strings.HasPrefix(s, "exited")
+	})
+
+	// Give the waiter goroutine time to evaluate the visible flag.
+	select {
+	case got := <-fired:
+		t.Fatalf("onExit should NOT fire for an invisible sync process, but got %+v", got)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: no hook fired.
+	}
+}
+
+// TestBackgroundManager_OnExitFiresAfterPromote verifies that a sync-started
+// process which times out (gets Promoted to visible=true) and then finishes
+// DOES fire the onExit hook, because it became a true background task.
+func TestBackgroundManager_OnExitFiresAfterPromote(t *testing.T) {
+	m := NewBackgroundManager()
+
+	fired := make(chan BgExit, 1)
+	m.SetOnExit(func(e BgExit) {
+		select {
+		case fired <- e:
+		default:
+		}
+	})
+
+	// Start invisible, then promote before it finishes.
+	id, err := m.Start("sleep 0.1", WithVisible(false))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Promote immediately (simulating the timeout path).
+	m.Promote(id)
+
+	var got BgExit
+	select {
+	case got = <-fired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("onExit hook did not fire after Promote within 3s")
+	}
+
+	if got.ID != id {
+		t.Errorf("ID = %q, want %q", got.ID, id)
+	}
+	if got.Status != "exited: 0" {
+		t.Errorf("Status = %q, want 'exited: 0'", got.Status)
+	}
+}
