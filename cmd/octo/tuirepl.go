@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -22,17 +23,19 @@ import (
 // dev-docs/tui-input-modes-design.md §3, §6.
 //
 // Input modes while a turn runs (design §7):
-//   - Enter      → steer  (folded into the turn at the next tool-batch boundary)
-//   - Alt+Enter  → newline (insert a line break in the input box)
-//   - Ctrl+Q     → queue  (run as a fresh turn after this one finishes)
-//   - Esc        → interrupt the current turn (queue survives)
-//   - Ctrl+C     → interrupt if a turn runs, else save & quit
-//   - Ctrl+D     → save & quit
+//   - Enter              → steer  (folded into the turn at the next tool-batch boundary)
+//   - Shift+Enter        → newline (on terminals that emit CSI-u sequences)
+//   - Alt+Enter          → newline (traditional escape sequence)
+//   - Ctrl+J             → newline (LF — works on all terminals)
+//   - Ctrl+Q             → queue  (run as a fresh turn after this one finishes)
+//   - Esc                → interrupt the current turn (queue survives)
+//   - Ctrl+C             → interrupt if a turn runs, else save & quit
+//   - Ctrl+D             → save & quit
 func runTUI(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	m := newTUIModel(cfg)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithFilter(shiftEnterFilter))
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
@@ -121,6 +124,29 @@ type askMsg struct {
 // tickInterval drives the spinner / elapsed-clock animation. ~8 Hz is smooth
 // without being wasteful; it only runs while a turn is in flight.
 const tickInterval = 120 * time.Millisecond
+
+// shiftEnterFilter intercepts Kitty-keyboard-protocol CSI sequences that
+// bubbletea v1 does not natively understand (e.g. Shift+Enter = \x1b[13;2u)
+// and converts them into plain KeyMsg events the rest of the app already
+// handles. This is a no-op on terminals that do not emit CSI-u sequences.
+func shiftEnterFilter(_ tea.Model, msg tea.Msg) tea.Msg {
+	// unknownCSISequenceMsg is unexported in bubbletea, so we identify it by
+	// reflection. Its underlying type is []byte.
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return msg
+	}
+	seq := string(v.Bytes())
+	switch seq {
+	case "\x1b[13;2u": // Shift+Enter
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	case "\x1b[13;3u": // Alt+Enter (CSI-u form)
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	case "\x1b[13;5u": // Ctrl+Enter
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	}
+	return msg
+}
 
 // tickCmd schedules the next animation tick.
 func tickCmd() tea.Cmd {

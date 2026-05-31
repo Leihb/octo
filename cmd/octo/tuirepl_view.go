@@ -63,6 +63,13 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputHistoryIdx = -1
 		return m, nil
 
+	case tea.KeyCtrlJ:
+		// Ctrl+J inserts a newline (LF) into the textarea. Works on all
+		// terminals, including those where Alt+Enter is not mapped.
+		var cmd tea.Cmd
+		m.ta, cmd = m.ta.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return m, cmd
+
 	case tea.KeyCtrlQ:
 		// Queue the current input to run as a future turn.
 		text := strings.TrimSpace(m.ta.Value())
@@ -482,7 +489,7 @@ func (m *tuiModel) renderStatusBar() string {
 
 	var hint string
 	if m.turnRunning {
-		hint = "Enter steer · Alt+Enter newline · Ctrl+Q queue · Esc interrupt"
+		hint = "Enter steer · Shift+Enter/Alt+Enter/Ctrl+J newline · Ctrl+Q queue · Esc interrupt"
 		if len(m.queue) > 0 {
 			hint += " · Ctrl+X unqueue"
 		}
