@@ -1,0 +1,395 @@
+// Package server provides the HTTP server for octo's REST API and Web UI.
+//
+// It is the M8 milestone implementation: a stateless HTTP layer over the
+// existing agent/session/tool infrastructure. Each request carries its own
+// context; sessions are loaded from / saved to disk on every turn.
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Leihb/octo-agent/internal/agent"
+	"github.com/Leihb/octo-agent/internal/config"
+	"github.com/Leihb/octo-agent/internal/prompt"
+	"github.com/Leihb/octo-agent/internal/provider"
+	"github.com/Leihb/octo-agent/internal/provider/anthropic"
+	"github.com/Leihb/octo-agent/internal/provider/openai"
+	"github.com/Leihb/octo-agent/internal/skills"
+	"github.com/Leihb/octo-agent/internal/tools"
+)
+
+// Config holds server-level settings.
+type Config struct {
+	// Bind address (e.g. ":8080", "127.0.0.1:8080").
+	Addr string
+
+	// Provider and model override; zero values fall back to env/config.
+	Provider string
+	Model    string
+	System   string
+
+	// MaxTokens forwarded to the agent per turn.
+	MaxTokens int
+
+	// Tools enables the agentic tool loop.
+	Tools bool
+
+	// CORSOrigins lists allowed origins for CORS. Empty disables CORS.
+	CORSOrigins []string
+}
+
+// Server is the HTTP server skeleton. It owns the mux, the agent factory,
+// and the in-memory turn lock (one turn per session at a time).
+type Server struct {
+	cfg  Config
+	mux  *http.ServeMux
+	http *http.Server
+
+	// agent factory state (resolved once at start)
+	provider       provider.Provider
+	model          string
+	system         string
+	skillReg       *skills.Registry
+	skillsManifest string
+	cwd            string
+	envCtx         string
+
+	// session-scoped turn locks: one turn per session at a time.
+	turnLocks map[string]*sync.Mutex
+	turnMu    sync.Mutex
+}
+
+// New builds a Server. It resolves provider/model, discovers skills, and
+// validates the bind address against security rules.
+func New(cfg Config) (*Server, error) {
+	if err := validateBindAddr(cfg.Addr); err != nil {
+		return nil, err
+	}
+
+	prov, model, err := resolveProviderAndModel(cfg.Provider, cfg.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	cwd, _ := os.Getwd()
+	envCtx := buildEnvContext(cwd)
+
+	skillReg := skills.Discover(cwd)
+	skillsManifest := skills.RenderManifest(skillReg)
+	tools.SetSkills(skillReg)
+
+	s := &Server{
+		cfg:            cfg,
+		mux:            http.NewServeMux(),
+		provider:       prov,
+		model:          model,
+		system:         cfg.System,
+		skillReg:       skillReg,
+		skillsManifest: skillsManifest,
+		cwd:            cwd,
+		envCtx:         envCtx,
+		turnLocks:      map[string]*sync.Mutex{},
+	}
+
+	s.registerRoutes()
+
+	s.http = &http.Server{
+		Addr:         cfg.Addr,
+		Handler:      s.corsMiddleware(s.mux),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 0, // SSE streams are long-lived
+		IdleTimeout:  120 * time.Second,
+	}
+
+	return s, nil
+}
+
+// ListenAndServe starts the HTTP server.
+func (s *Server) ListenAndServe() error {
+	return s.http.ListenAndServe()
+}
+
+// Shutdown gracefully shuts down the server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.http.Shutdown(ctx)
+}
+
+// registerRoutes wires all handlers.
+func (s *Server) registerRoutes() {
+	s.mux.HandleFunc("POST /api/chat", s.handleCreateChat)
+	s.mux.HandleFunc("POST /api/chat/{id}/turn", s.handleTurnOrSSE)
+	s.mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	s.mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	s.mux.HandleFunc("GET /api/tools", s.handleListTools)
+	s.mux.HandleFunc("GET /api/skills", s.handleListSkills)
+	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+
+	// Static files (Web UI) — served from embedded filesystem.
+	s.mux.Handle("/", s.staticHandler())
+}
+
+// corsMiddleware wraps the mux with CORS headers when configured.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	if len(s.cfg.CORSOrigins) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		allowed := false
+		for _, o := range s.cfg.CORSOrigins {
+			if o == "*" || o == origin {
+				allowed = true
+				break
+			}
+		}
+		if allowed {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+// sessionTurnLock returns the mutex for a given session ID, creating it if
+// needed. This serialises turns per session so concurrent POSTs to the same
+// session don't interleave.
+func (s *Server) sessionTurnLock(id string) *sync.Mutex {
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if mu, ok := s.turnLocks[id]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	s.turnLocks[id] = mu
+	return mu
+}
+
+// buildAgent creates a fresh agent for a turn. The caller must have locked
+// the session's turn mutex.
+func (s *Server) buildAgent(sess *agent.Session) *agent.Agent {
+	sender := providerSender{p: s.provider}
+	a := agent.New(sender, s.model)
+	a.CWD = s.cwd
+	a.MaxTokens = s.cfg.MaxTokens
+	a.System = prompt.Compose(s.system, s.cwd, s.envCtx, s.skillsManifest, "")
+	if sess.Model != "" {
+		a.Model = sess.Model
+	}
+	if len(sess.Messages) > 0 {
+		a.History = sess.ToHistory()
+	}
+	return a
+}
+
+// writeJSON is a convenience helper for JSON responses.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeError writes a structured error response.
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// readBodyJSON reads and unmarshals the request body.
+func readBodyJSON(r *http.Request, v any) error {
+	defer r.Body.Close()
+	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// ─── Provider resolution (shared logic extracted from cmd/octo) ─────────────
+
+func resolveProviderAndModel(flagProvider, flagModel string) (provider.Provider, string, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, "", fmt.Errorf("load config: %w", err)
+	}
+
+	provName := firstNonEmpty(flagProvider, os.Getenv("OCTO_PROVIDER"), cfg.Provider, "anthropic")
+	model := flagModel
+	if model == "" {
+		model = modelFromEnv(provName)
+	}
+	if model == "" && provName == cfg.Provider {
+		model = cfg.Model
+	}
+	if model == "" {
+		model = defaultModelFor(provName)
+	}
+	if model == "" {
+		return nil, "", fmt.Errorf("unknown provider %q", provName)
+	}
+
+	prov, err := buildProvider(provName, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return prov, model, nil
+}
+
+func buildProvider(name string, cfg config.Config) (provider.Provider, error) {
+	switch name {
+	case "anthropic":
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if apiKey == "" && cfg.Provider == "anthropic" {
+			apiKey = cfg.APIKey
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY is not set")
+		}
+		client, err := anthropic.New(apiKey)
+		if err != nil {
+			return nil, err
+		}
+		if baseURL := resolveBaseURL(name, cfg); baseURL != "" {
+			client.BaseURL = baseURL
+		}
+		return client, nil
+	case "openai":
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		if apiKey == "" && cfg.Provider == "openai" {
+			apiKey = cfg.APIKey
+		}
+		if apiKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY is not set")
+		}
+		client, err := openai.New(apiKey)
+		if err != nil {
+			return nil, err
+		}
+		if baseURL := resolveBaseURL(name, cfg); baseURL != "" {
+			client.BaseURL = baseURL
+		}
+		return client, nil
+	default:
+		return nil, fmt.Errorf("unknown provider %q", name)
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func modelFromEnv(provider string) string {
+	switch provider {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_MODEL")
+	case "openai":
+		return os.Getenv("OPENAI_MODEL")
+	}
+	return ""
+}
+
+func defaultModelFor(provider string) string {
+	switch provider {
+	case "anthropic":
+		return "claude-haiku-4-5-20251001"
+	case "openai":
+		return "gpt-4o-mini"
+	}
+	return ""
+}
+
+func resolveBaseURL(provider string, cfg config.Config) string {
+	if cfg.Provider == provider {
+		return cfg.BaseURL
+	}
+	return ""
+}
+
+// buildEnvContext mirrors cmd/octo's env context builder.
+func buildEnvContext(cwd string) string {
+	var b strings.Builder
+	b.WriteString("# Environment\n\n")
+	if cwd != "" {
+		fmt.Fprintf(&b, "- Working directory: %s\n", cwd)
+	}
+	fmt.Fprintf(&b, "- Today's date: %s\n", time.Now().Format("2006-01-02"))
+	return b.String()
+}
+
+// validateBindAddr enforces the M6.5 security rule: non-localhost binds
+// require a permissions.yml file to exist.
+func validateBindAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Try adding a default port for bare IPs.
+		host, _, err = net.SplitHostPort(addr + ":8080")
+		if err != nil {
+			return fmt.Errorf("invalid bind address %q", addr)
+		}
+	}
+
+	// localhost, 127.0.0.1, ::1, and empty (all interfaces shorthand) are
+	// allowed without a permissions file. Any other host requires one.
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot verify permissions.yml: %w", err)
+	}
+	permPath := filepath.Join(home, ".octo", "permissions.yml")
+	if _, err := os.Stat(permPath); os.IsNotExist(err) {
+		return fmt.Errorf("bind address %q is not localhost: create %s to enable non-localhost binds", addr, permPath)
+	}
+	return nil
+}
+
+// providerSender adapts provider.Provider into agent.Sender.
+type providerSender struct {
+	p provider.Provider
+}
+
+func (s providerSender) SendMessages(ctx context.Context, model, system string, msgs []agent.Message, maxTokens int) (agent.Reply, error) {
+	resp, err := s.p.Send(ctx, provider.Request{
+		Model:        model,
+		SystemPrompt: system,
+		Messages:     msgs,
+		MaxTokens:    maxTokens,
+	})
+	if err != nil {
+		return agent.Reply{}, err
+	}
+	return replyFromResponse(resp), nil
+}
+
+func replyFromResponse(resp provider.Response) agent.Reply {
+	return agent.Reply{
+		Content:          resp.Content,
+		Blocks:           resp.Blocks,
+		Model:            resp.Model,
+		StopReason:       resp.StopReason,
+		InputTokens:      resp.InputTokens,
+		OutputTokens:     resp.OutputTokens,
+		CacheReadTokens:  resp.CacheReadTokens,
+		CacheWriteTokens: resp.CacheWriteTokens,
+	}
+}
+
+// Compile-time assertion.
+var _ agent.Sender = providerSender{}
