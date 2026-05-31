@@ -369,10 +369,6 @@ func (m *tuiModel) View() string {
 
 	var b strings.Builder
 
-	// Banner
-	b.WriteString(tui.Banner("", m.a.Model, m.cwd, m.width))
-	b.WriteByte('\n')
-
 	// Live partial assistant text
 	if p := m.partial.String(); p != "" {
 		b.WriteString(m.md.render(p, m.width))
