@@ -309,3 +309,76 @@ func TestTUI_SubmitSavesToHistory(t *testing.T) {
 		t.Errorf("history after new line = %v, want [hello world]", m.inputHistory)
 	}
 }
+
+func TestTUI_ScrollbackAutoFollowsDuringTurn(t *testing.T) {
+	m := newTestModel()
+
+	// Pre-populate scrollback with enough lines to scroll.
+	for i := 0; i < 30; i++ {
+		m.pushScrollback("old line")
+	}
+
+	// User scrolls up.
+	m.scrollOffset = 10
+	if m.scrollOffset != 10 {
+		t.Fatal("scrollOffset should be 10 after scrolling up")
+	}
+
+	// New content arrives during a turn — should auto-reset to bottom.
+	m.turnRunning = true
+	m.pushScrollback("new content")
+	if m.scrollOffset != 0 {
+		t.Errorf("pushScrollback during turn should reset scrollOffset to 0, got %d", m.scrollOffset)
+	}
+}
+
+func TestTUI_ScrollbackPreservesOffsetWhenIdle(t *testing.T) {
+	m := newTestModel()
+
+	for i := 0; i < 30; i++ {
+		m.pushScrollback("old line")
+	}
+
+	m.scrollOffset = 8
+
+	// No turn running — pushScrollback should preserve scrollOffset.
+	m.turnRunning = false
+	m.pushScrollback("some notice line")
+	if m.scrollOffset != 8 {
+		t.Errorf("pushScrollback while idle should preserve scrollOffset, got %d", m.scrollOffset)
+	}
+}
+
+func TestTUI_MouseWheelUp(t *testing.T) {
+	m := newTestModel()
+	m.scrollOffset = 0
+
+	m.handleMouse(tea.MouseMsg{Type: tea.MouseWheelUp})
+	if m.scrollOffset != wheelScrollLines {
+		t.Errorf("MouseWheelUp should increase offset by %d, got %d", wheelScrollLines, m.scrollOffset)
+	}
+}
+
+func TestTUI_MouseWheelDown(t *testing.T) {
+	m := newTestModel()
+	m.scrollOffset = 12
+
+	m.handleMouse(tea.MouseMsg{Type: tea.MouseWheelDown})
+	if m.scrollOffset != 12-wheelScrollLines {
+		t.Errorf("MouseWheelDown should decrease offset by %d, got %d", wheelScrollLines, m.scrollOffset)
+	}
+
+	// Scroll past zero — should clamp to 0, not go negative.
+	m.scrollOffset = 2
+	m.handleMouse(tea.MouseMsg{Type: tea.MouseWheelDown})
+	if m.scrollOffset != 0 {
+		t.Errorf("MouseWheelDown should clamp to 0, got %d", m.scrollOffset)
+	}
+
+	// Already at 0 — should stay at 0.
+	m.scrollOffset = 0
+	m.handleMouse(tea.MouseMsg{Type: tea.MouseWheelDown})
+	if m.scrollOffset != 0 {
+		t.Errorf("MouseWheelDown at 0 should stay 0, got %d", m.scrollOffset)
+	}
+}

@@ -564,8 +564,14 @@ func (m *tuiModel) commitToolLine(line string) tea.Cmd {
 }
 
 // pushScrollback appends a line to the internal scrollback buffer.
+// If a turn is running, the view auto-follows by resetting scrollOffset to 0
+// so new content is always visible. When no turn is active, the scroll position
+// is preserved so the user can review history undisturbed.
 func (m *tuiModel) pushScrollback(line string) {
 	m.scrollback = append(m.scrollback, line)
+	if m.turnRunning {
+		m.scrollOffset = 0
+	}
 }
 
 func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {

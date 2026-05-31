@@ -34,17 +34,14 @@ const wheelScrollLines = 4
 // handleKey routes a keypress by context: a modal grabs all keys; otherwise the
 // keymap depends on whether a turn is running (design §7).
 func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Only handle wheel events; ignore clicks, drags, etc.
 	switch msg.Type {
 	case tea.MouseWheelUp:
 		m.scrollOffset += wheelScrollLines
 		return m, nil
 	case tea.MouseWheelDown:
-		if m.scrollOffset > 0 {
-			m.scrollOffset -= wheelScrollLines
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
+		m.scrollOffset -= wheelScrollLines
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
 		}
 		return m, nil
 	}
@@ -403,6 +400,15 @@ func (m *tuiModel) View() string {
 	if available < 0 {
 		available = 0
 	}
+	// Clamp scrollOffset first so start uses a valid value in this frame
+	// (previously clamped after start, causing one-frame-late correction).
+	maxOffset := len(m.scrollback) - available
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.scrollOffset > maxOffset {
+		m.scrollOffset = maxOffset
+	}
 	start := 0
 	if len(m.scrollback) > available {
 		start = len(m.scrollback) - available
@@ -412,13 +418,6 @@ func (m *tuiModel) View() string {
 	start -= m.scrollOffset
 	if start < 0 {
 		start = 0
-	}
-	maxOffset := len(m.scrollback) - available
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if m.scrollOffset > maxOffset {
-		m.scrollOffset = maxOffset
 	}
 	for i := start; i < len(m.scrollback); i++ {
 		b.WriteString(m.scrollback[i])
