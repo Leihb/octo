@@ -95,6 +95,10 @@ func (WebSearchTool) Definition() agent.ToolDefinition {
 }
 
 func (WebSearchTool) Execute(ctx context.Context, _ string, input map[string]any) (agent.ToolResult, error) {
+	if !NetworkAllowed() {
+		return agent.ToolResult{Text: ""}, fmt.Errorf("web_search: network access is disabled by sandbox")
+	}
+
 	query, _ := input["query"].(string)
 	if strings.TrimSpace(query) == "" {
 		return agent.ToolResult{}, fmt.Errorf("web_search: query is required")

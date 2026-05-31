@@ -18,6 +18,15 @@ var activeSandbox *sandbox.Policy
 // Pass nil to disable. cmd/octo calls this when --sandbox is requested.
 func SetSandbox(p *sandbox.Policy) { activeSandbox = p }
 
+// NetworkAllowed reports whether the active sandbox policy permits network
+// access. When no sandbox is active (nil policy) network is allowed.
+func NetworkAllowed() bool {
+	if activeSandbox == nil {
+		return true
+	}
+	return activeSandbox.AllowNetwork
+}
+
 // shellCommand builds the *exec.Cmd that runs `command` via the shell, wrapped
 // in the active sandbox when one is set. Both TerminalTool and the background
 // manager route through here so confinement is uniform.
