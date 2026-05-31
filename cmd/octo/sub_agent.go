@@ -44,11 +44,11 @@ func newAgentSpawner(parent *agent.Agent, executor agent.ToolExecutor, toolsFn f
 	}
 }
 
-// childMaxTurns caps the sub-agent's tool loop. Smaller than the parent's
-// default — sub-agents are meant for focused sub-tasks, not free-form work,
-// and a runaway child can otherwise burn through budget unnoticed. Each
-// Continue (send_message) re-arms this budget for the next round.
-const childMaxTurns = 12
+// childMaxTurns caps the sub-agent's tool loop.
+// Set to the same default as the parent (100) so sub-agents have enough
+// budget for complex sub-tasks. Each Continue (send_message) re-arms
+// this budget for the next round.
+const childMaxTurns = 100
 
 // Spawn implements tools.Spawner. It builds an isolated child, registers it so
 // a later send_message can continue it, runs the first prompt, and returns the
