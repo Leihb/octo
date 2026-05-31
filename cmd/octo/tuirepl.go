@@ -195,6 +195,12 @@ type tuiModel struct {
 	// queue holds Alt+Enter messages to run as future turns (design §8/§10).
 	queue []pendingItem
 
+	// pendingSteer holds steer messages typed during a running turn that
+	// haven't been drained yet. Shown in the live View area (below the
+	// scrollback) so the user sees immediate feedback without breaking
+	// the chronological message order (Claude Code style).
+	pendingSteer []string
+
 	// modal, when non-nil, is an active Ask prompt (design §6).
 	modal *modalState
 
@@ -475,6 +481,8 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 		// chronological order — the user sees their steer where the model
 		// actually receives it, not prematurely when they typed it.
 		// Also add to inputHistory so ↑ can recall each steer line.
+		// Clear the "pending steer" live indicator.
+		m.pendingSteer = nil
 		for _, line := range strings.Split(ev.Text, "\n\n") {
 			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
 				m.inputHistory = append(m.inputHistory, line)
@@ -585,7 +593,8 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 	m.turnRunning = false
 	m.cancelTurn = nil
 	m.streaming = false
-	m.running = nil // clear any live tool indicator (e.g. on interrupt)
+	m.running = nil      // clear any live tool indicator (e.g. on interrupt)
+	m.pendingSteer = nil // clear pending steer display (drained or degraded)
 
 	// Auto-save (history is well-formed even after an interrupt).
 	if !m.cfg.noSave {

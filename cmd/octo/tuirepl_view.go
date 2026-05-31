@@ -16,14 +16,15 @@ import (
 )
 
 var (
-	promptStyle   = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
-	noticeStyle   = lipgloss.NewStyle().Foreground(tui.ColMuted)
-	errorStyle    = lipgloss.NewStyle().Foreground(tui.ColDanger)
-	toolErrStyle  = lipgloss.NewStyle().Foreground(tui.ColDanger)
-	queueStyle    = lipgloss.NewStyle().Foreground(tui.ColAccent)
-	modalStyle    = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
-	hintStyle     = lipgloss.NewStyle().Foreground(tui.ColDimmer).Italic(true)
-	userEchoStyle = lipgloss.NewStyle().Foreground(tui.ColUserMsg).Bold(true)
+	promptStyle       = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
+	noticeStyle       = lipgloss.NewStyle().Foreground(tui.ColMuted)
+	errorStyle        = lipgloss.NewStyle().Foreground(tui.ColDanger)
+	toolErrStyle      = lipgloss.NewStyle().Foreground(tui.ColDanger)
+	queueStyle        = lipgloss.NewStyle().Foreground(tui.ColAccent)
+	modalStyle        = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
+	hintStyle         = lipgloss.NewStyle().Foreground(tui.ColDimmer).Italic(true)
+	userEchoStyle     = lipgloss.NewStyle().Foreground(tui.ColUserMsg).Bold(true)
+	pendingSteerStyle = lipgloss.NewStyle().Foreground(tui.ColMuted)
 )
 
 // wheelScrollLines is how many lines one wheel tick scrolls.  Larger than 1
@@ -145,9 +146,10 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Steer: fold into the running turn at the next tool-batch boundary.
-	// No immediate UI echo — the steer text is displayed later via
-	// EventSteerInjected when it is actually drained into the tool_result,
-	// preserving chronological order.
+	// Echo is deferred to EventSteerInjected (preserves chronological order
+	// with tool_result). A "pending steer" indicator is shown in the live
+	// View area below the scrollback for immediate visual feedback.
+	m.pendingSteer = append(m.pendingSteer, text)
 	m.a.Steer(text)
 	return m, nil
 }
@@ -218,6 +220,7 @@ func (m *tuiModel) interrupt() {
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
+	m.pendingSteer = nil
 }
 
 // ── modal (Ask) ──
@@ -344,6 +347,9 @@ func (m *tuiModel) liveHeight() int {
 	if m.running != nil || (m.turnRunning && !m.streaming) {
 		h++
 	}
+	if n := len(m.pendingSteer); n > 0 {
+		h += n // one line per pending steer message
+	}
 	if n := len(m.queue); n > 0 {
 		h += 3 + n // panel border (2) + title (1) + n body lines
 	}
@@ -409,6 +415,17 @@ func (m *tuiModel) View() string {
 		}
 		b.WriteString(tui.Panel(fmt.Sprintf("background (%d running)", len(bg)), lines.String()))
 		b.WriteByte('\n')
+	}
+
+	// Pending steer — show what the user typed mid-turn, indented right above
+	// the input box (Claude Code style: input上方，比普通消息多了一个indent).
+	// Does not enter the scrollback until drained via EventSteerInjected,
+	// preserving chronological order with tool_result.
+	if len(m.pendingSteer) > 0 {
+		for _, s := range m.pendingSteer {
+			b.WriteString(pendingSteerStyle.Render("  > ") + pendingSteerStyle.Render(s))
+			b.WriteByte('\n')
+		}
 	}
 
 	// Input box + status bar
