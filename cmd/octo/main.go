@@ -73,6 +73,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runTask(args[1:], stdin, stdout, stderr)
 	case "skills":
 		return runSkills(args[1:], stdout, stderr)
+	case "channel":
+		return runChannel(args[1:], stdin, stdout, stderr)
 	case "completion":
 		return runCompletion(args[1:], stdout, stderr)
 	case "__complete":
@@ -93,6 +95,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  chat       Start an interactive session (or single-turn with a message)")
+	fmt.Fprintln(w, "  channel    Start IM platform bridges (e.g. `octo channel start`)")
 	fmt.Fprintln(w, "  config     Set your default provider/model (~/.octo/config.json)")
 	fmt.Fprintln(w, "  init       Analyze the repo and generate/update .octorules")
 	fmt.Fprintln(w, "  memory     Manage cross-session memory (e.g. `octo memory list`)")
