@@ -99,6 +99,9 @@ func runTUI(cfg replConfig) int {
 			return 1
 		}
 	}
+	if !cfg.verbosity.quiet() {
+		fmt.Fprintf(cfg.stdout, "\nSession saved. Resume anytime with: octo chat -c %s\n", cfg.session.ShortID())
+	}
 	return 0
 }
 
