@@ -29,27 +29,6 @@ var (
 // wheelScrollLines is how many lines one wheel tick scrolls.  Larger than 1
 // so track-pad two-finger scrolling feels responsive (bubbletea delivers one
 // MouseWheel event per gesture tick, not per pixel).
-const wheelScrollLines = 4
-
-// handleKey routes a keypress by context: a modal grabs all keys; otherwise the
-// keymap depends on whether a turn is running (design §7).
-func (m *tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.MouseWheelUp:
-		m.sticky = false
-		m.scrollOffset += wheelScrollLines
-		return m, nil
-	case tea.MouseWheelDown:
-		m.sticky = false
-		m.scrollOffset -= wheelScrollLines
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
-		}
-		return m, nil
-	}
-	return m, nil
-}
-
 func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modal != nil {
 		return m.handleModalKey(msg)
@@ -85,7 +64,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if n := len(m.queue); n > 0 {
 			dropped := m.queue[n-1].text
 			m.queue = m.queue[:n-1]
-			m.pushScrollback(queueStyle.Render("✕ unqueued: " + dropped))
+			m.println(queueStyle.Render("✕ unqueued: " + dropped))
 		}
 		return m, nil
 
@@ -102,7 +81,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				next = permission.ModeInteractive
 			}
 			m.cfg.permEngine.SetMode(next)
-			m.pushScrollback(noticeStyle.Render("Permission mode: " + string(next)))
+			m.println(noticeStyle.Render("Permission mode: " + string(next)))
 		}
 		return m, nil
 
@@ -143,24 +122,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// PageUp/PageDown: keyboard scroll — reliable fallback when
-	// mouse wheel events are not delivered (some terminals/tmux).
-	// Half-page scroll matches Claude Code's behavior.
-	case tea.KeyPgUp:
-		m.sticky = false
-		m.scrollOffset += m.height / 2
-		return m, nil
-	case tea.KeyPgDown:
-		m.sticky = false
-		m.scrollOffset -= m.height / 2
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
-		}
-		return m, nil
-	case tea.KeyEnd:
-		// Jump to bottom and re-engage auto-follow.
-		m.sticky = true
-		m.scrollOffset = 0
 		return m, nil
 	}
 
@@ -197,7 +158,7 @@ func (m *tuiModel) submit(alt bool) (tea.Model, tea.Cmd) {
 	if alt {
 		// Queue: run as a future turn.
 		m.queue = append(m.queue, pendingItem{text: text})
-		m.pushScrollback(queueStyle.Render("＋ queued: " + text))
+		m.println(queueStyle.Render("＋ queued: " + text))
 		return m, nil
 	}
 	// Steer: fold into the running turn at the next tool-batch boundary.
@@ -218,7 +179,7 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 	// /init: generate .octorules as a normal tool-enabled turn.
 	if text == "/init" {
 		if len(cfg.tools) == 0 || cfg.executor == nil {
-			m.pushScrollback(noticeStyle.Render("/init needs tools — restart with: octo chat --tools"))
+			m.println(noticeStyle.Render("/init needs tools — restart with: octo chat --tools"))
 			return m, nil
 		}
 		return m, m.startTurnEcho(initInstruction, "/init")
@@ -261,7 +222,7 @@ func (m *tuiModel) dispatchSlash(text string) (tea.Model, tea.Cmd) {
 		case "/mcp":
 			printMCP(&b)
 		}
-		m.pushScrollback(strings.TrimRight(b.String(), "\n"))
+		m.println(strings.TrimRight(b.String(), "\n"))
 		return m, nil
 	default:
 		// Not a recognised command — treat it as ordinary user text so
@@ -425,50 +386,17 @@ func (m *tuiModel) View() string {
 
 	var b strings.Builder
 
-	// ── Banner ──
+	// Banner
 	b.WriteString(tui.Banner("", m.a.Model, m.cwd, m.width))
 	b.WriteByte('\n')
 
-	// ── Scrollback (message history) ──
-	// Calculate how many lines we can show between header and live region.
-	liveH := m.liveHeight()
-	headerH := tui.BannerHeight + 1             // Banner + the newline after it
-	available := m.height - headerH - liveH - 1 // -1 for safety margin
-	if available < 0 {
-		available = 0
-	}
-	// Clamp scrollOffset to valid range without mutating on every frame.
-	// Previously every View() call set scrollOffset = maxOffset (0 when
-	// content fits on one screen), destroying user scroll every frame.
-	maxOffset := len(m.scrollback) - available
-	if maxOffset < 0 {
-		maxOffset = 0
-		m.scrollOffset = 0
-	} else if m.scrollOffset > maxOffset {
-		m.scrollOffset = maxOffset
-	}
-	start := 0
-	if len(m.scrollback) > available {
-		start = len(m.scrollback) - available
-	}
-	// Apply user scroll offset (mouse wheel), clamped so we never scroll past
-	// the top or below the bottom.
-	start -= m.scrollOffset
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(m.scrollback); i++ {
-		b.WriteString(m.scrollback[i])
-		b.WriteByte('\n')
-	}
-
-	// ── Live partial assistant text ──
+	// Live partial assistant text
 	if p := m.partial.String(); p != "" {
 		b.WriteString(m.md.render(p, m.width))
 		b.WriteByte('\n')
 	}
 
-	// ── Activity indicator ──
+	// Activity indicator
 	if m.running != nil {
 		b.WriteString(m.spinnerLine(m.running.verb+"("+m.running.target+")", m.running.start))
 		b.WriteByte('\n')
@@ -477,7 +405,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// ── Queue panel ──
+	// Queue panel
 	if len(m.queue) > 0 {
 		var items strings.Builder
 		for i, q := range m.queue {
@@ -490,7 +418,7 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// ── Background processes panel ──
+	// Background processes panel
 	if bg := tools.RunningBackground(); len(bg) > 0 {
 		frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
 		var lines strings.Builder
@@ -504,32 +432,12 @@ func (m *tuiModel) View() string {
 		b.WriteByte('\n')
 	}
 
-	// ── Input box + status bar ──
+	// Input box + status bar
 	b.WriteString(m.renderInputBox())
 	b.WriteByte('\n')
 	b.WriteString(m.renderStatusBar())
 	return b.String()
 }
-
-// thinkingPhrases rotate (slowly) on the initial-wait placeholder so the
-// pause feels alive, CC-style. Cycled by spinnerFrame.
-var thinkingPhrases = []string{"Thinking", "Pondering", "Working", "Reasoning"}
-
-func (m *tuiModel) thinkingPhrase() string {
-	// ~16 ticks (~2s at 120ms) per phrase.
-	return thinkingPhrases[(m.spinnerFrame/16)%len(thinkingPhrases)]
-}
-
-// spinnerLine renders one animated activity line: a braille frame, a label,
-// and elapsed seconds since the given start. Reuses the plain spinner's frame
-// set (spinner.go) so the two paths look consistent.
-func (m *tuiModel) spinnerLine(label string, since time.Time) string {
-	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-	return hintStyle.Render(fmt.Sprintf("%c %s (%s)", frame, label, time.Since(since).Round(time.Second)))
-}
-
-// renderInputBox draws the prompt + current input as a flat line (Claude Code
-// style). No border — just the prompt prefix and the textinput content.
 func (m *tuiModel) renderInputBox() string {
 	return promptStyle.Render("> ") + m.ti.View()
 }
@@ -649,4 +557,19 @@ func cacheLine(v verbosity, reply agent.Reply) string {
 	}
 	return noticeStyle.Render(fmt.Sprintf("  ⓘ cache: %d read, %d write (in %d / out %d)",
 		reply.CacheReadTokens, reply.CacheWriteTokens, reply.InputTokens, reply.OutputTokens))
+}
+
+// thinkingPhrases rotate (slowly) on the initial-wait placeholder so the
+// pause feels alive, CC-style. Cycled by spinnerFrame.
+var thinkingPhrases = []string{"Thinking", "Pondering", "Working", "Reasoning"}
+
+func (m *tuiModel) thinkingPhrase() string {
+	return thinkingPhrases[(m.spinnerFrame/16)%len(thinkingPhrases)]
+}
+
+// spinnerLine renders one animated activity line: a braille frame, a label,
+// and elapsed seconds since the given start.
+func (m *tuiModel) spinnerLine(label string, since time.Time) string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	return hintStyle.Render(fmt.Sprintf("%c %s (%s)", frame, label, time.Since(since).Round(time.Second)))
 }

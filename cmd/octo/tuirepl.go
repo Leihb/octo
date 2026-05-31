@@ -31,7 +31,7 @@ func runTUI(cfg replConfig) int {
 	defer tools.KillAllBackground()
 
 	m := newTUIModel(cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(m)
 	sink := &tuiSink{prog: p}
 	m.sink = sink
 
@@ -82,16 +82,10 @@ func runTUI(cfg replConfig) int {
 	})
 	defer tools.SetBackgroundOnExit(nil)
 
-	finalModel, err := p.Run()
+	_, err := p.Run()
 	if err != nil {
 		fmt.Fprintf(cfg.stderr, "octo chat: tui: %v\n", err)
 		return 1
-	}
-
-	// Dump scrollback to the main screen after alt-screen exits so the
-	// conversation history survives the session.
-	if m, ok := finalModel.(*tuiModel); ok && len(m.scrollback) > 0 {
-		fmt.Println(strings.Join(m.scrollback, "\n"))
 	}
 
 	// Final save on exit (mirrors runREPL's exit save).
@@ -222,19 +216,10 @@ type tuiModel struct {
 	// until completion.)
 	running *runningTool
 
-	// scrollback holds committed transcript lines (user messages, assistant
-	// text, tool cards, notices) rendered inside the alt-screen below the banner.
-	// On exit the buffer is dumped back to the main screen so history survives.
-	scrollback []string
-
-	// scrollOffset is the number of lines the user has scrolled up in the
-	// scrollback (0 = pinned to bottom, showing the newest content).
-	scrollOffset int
-
-	// sticky is true when the view should auto-follow new content (pinned to
-	// bottom). Set on new-turn start and scrollToBottom; cleared by any manual
-	// scroll (mouse wheel, keyboard nav). Mirrors Claude Code's stickyScroll.
-	sticky bool
+	// printlnBuf accumulates lines to emit via tea.Println at the end of each
+	// Update cycle. In inline mode, committed output goes to the terminal
+	// scrollback above the live View() area — no alt-screen buffer needed.
+	printlnBuf []string
 
 	// height is the terminal height in cells, updated by WindowSizeMsg.
 	height int
@@ -274,7 +259,12 @@ func newTUIModel(cfg replConfig) *tuiModel {
 	return &tuiModel{cfg: cfg, a: cfg.a, cwd: abbreviateHome(workingDir()), ti: ti, inputHistoryIdx: -1, md: markdownRenderer{style: style}}
 }
 
-func (m *tuiModel) Init() tea.Cmd { return textinput.Blink }
+func (m *tuiModel) Init() tea.Cmd {
+	return tea.Sequence(
+		tea.Println(tui.Banner("", m.a.Model, m.cwd, m.width)),
+		textinput.Blink,
+	)
+}
 
 // startTurn launches a turn whose transcript echo is the submitted line itself.
 func (m *tuiModel) startTurn(line string) tea.Cmd {
@@ -290,7 +280,6 @@ func (m *tuiModel) startTurn(line string) tea.Cmd {
 func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 	m.turnRunning = true
 	m.streaming = false
-	m.sticky = true
 	m.turnStart = time.Now()
 	m.spinnerFrame = 0
 	m.running = nil
@@ -311,7 +300,7 @@ func (m *tuiModel) startTurnEcho(line, echo string) tea.Cmd {
 	// surfaced as a bg notice and isn't user input. Either way, start the
 	// animation ticker for the spinner + elapsed clock.
 	if echo != "" && !strings.HasPrefix(echo, "<system-reminder>") {
-		m.pushScrollback(userEchoStyle.Render("> ") + echo)
+		m.println(userEchoStyle.Render("> ") + echo)
 	}
 	return tickCmd()
 }
@@ -322,23 +311,20 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ti.Width = msg.Width - 4 // account for border + padding
-		return m, nil
-
-	case tea.MouseMsg:
-		return m.handleMouse(msg)
+		return m, m.flushPrints()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
 	case turnStartedMsg:
-		return m, nil
+		return m, m.flushPrints()
 
 	case tickMsg:
 		// Animate while a turn runs OR while background processes are still
 		// going (so the live "background (N running)" panel keeps ticking even
 		// between turns); let the ticker die once both are quiet.
 		if !m.turnRunning && len(tools.RunningBackground()) == 0 {
-			return m, nil
+			return m, m.flushPrints()
 		}
 		m.spinnerFrame++
 		return m, tickCmd()
@@ -347,13 +333,13 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleEvent(msg.ev)
 
 	case noticeMsg:
-		m.pushScrollback(noticeStyle.Render(msg.text))
-		return m, nil
+		m.println(noticeStyle.Render(msg.text))
+		return m, m.flushPrints()
 
 	case bgExitMsg:
 		// Async background-process completion: show a one-line scrollback notice
 		// (the full output rode into the conversation via Steer).
-		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
+		m.println(noticeStyle.Render(fmt.Sprintf(
 			"↳ %s (%s) %s", msg.e.ID, truncate1Line(msg.e.Command), msg.e.Status)))
 		// Idle auto-turn: if no turn is running and nothing is queued, drain the
 		// steer buffer (which holds the full <system-reminder> notice) and start a
@@ -364,7 +350,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startTurnEcho(s, "")
 			}
 		}
-		return m, nil
+		return m, m.flushPrints()
 
 	case subAgentNoteMsg:
 		// Async sub-agent completion: show a one-line scrollback notice (the
@@ -373,7 +359,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ev.Kind == "message_reply" {
 			label = "replied"
 		}
-		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
+		m.println(noticeStyle.Render(fmt.Sprintf(
 			"↳ sub-agent %s (%s) %s", msg.ev.AgentID, truncate1Line(msg.ev.Description), label)))
 		// Idle auto-turn: same logic as bgExitMsg — drain steer and trigger a
 		// turn so the model sees the notification immediately.
@@ -382,29 +368,29 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.startTurnEcho(s, "")
 			}
 		}
-		return m, nil
+		return m, m.flushPrints()
 
 	case turnEndedMsg:
 		// Flush any trailing assistant block (markdown-rendered); then render
 		// the cache/error footer.
 		if s, ok := m.flushTextString(); ok {
-			m.pushScrollback(s)
+			m.println(s)
 		}
 		if msg.err != nil && msg.err != context.Canceled {
-			m.pushScrollback(errorStyle.Render("error: " + msg.err.Error()))
+			m.println(errorStyle.Render("error: " + msg.err.Error()))
 		} else if msg.err == context.Canceled {
-			m.pushScrollback(noticeStyle.Render("^C interrupted"))
+			m.println(noticeStyle.Render("^C interrupted"))
 		} else if c := cacheLine(m.cfg.verbosity, msg.reply); c != "" {
-			m.pushScrollback(c)
+			m.println(c)
 		}
-		return m, nil
+		return m, m.flushPrints()
 
 	case turnFinishedMsg:
 		return m.handleTurnFinished()
 
 	case askMsg:
 		m.openModal(msg)
-		return m, nil
+		return m, m.flushPrints()
 
 	case goalPlannedMsg:
 		return m.onGoalPlanned(msg)
@@ -415,15 +401,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case goalCancelledMsg:
 		m.turnRunning = false
 		m.cancelTurn = nil
-		m.pushScrollback(noticeStyle.Render(fmt.Sprintf(
+		m.println(noticeStyle.Render(fmt.Sprintf(
 			"Cancelled. Planned as %s — run later with /goal resume %s (or octo goal run %s).",
 			msg.task.ShortID(), msg.task.ShortID(), msg.task.ShortID())))
-		return m, nil
+		return m, m.flushPrints()
 
 	case goalDoneMsg:
 		return m.onGoalDone(msg)
 	}
-	return m, nil
+	return m, m.flushPrints()
 }
 
 // handleEvent commits streaming text and tool events to the scrollback,
@@ -489,7 +475,7 @@ func (m *tuiModel) handleEvent(ev agent.AgentEvent) tea.Cmd {
 				m.inputHistory = append(m.inputHistory, line)
 			}
 		}
-		m.pushScrollback(userEchoStyle.Render("> ") + ev.Text)
+		m.println(userEchoStyle.Render("> ") + ev.Text)
 		return nil
 	}
 	return nil
@@ -518,7 +504,7 @@ func (m *tuiModel) appendText(text string) tea.Cmd {
 		complete := buf[:idx]
 		m.partial.Reset()
 		m.partial.WriteString(buf[idx+1:])
-		m.pushScrollback(complete)
+		m.println(complete)
 		return nil
 	}
 
@@ -528,7 +514,7 @@ func (m *tuiModel) appendText(text string) tea.Cmd {
 	}
 	m.partial.Reset()
 	m.partial.WriteString(rest)
-	m.pushScrollback(m.md.render(commit, m.width))
+	m.println(m.md.render(commit, m.width))
 	return nil
 }
 
@@ -540,7 +526,7 @@ func (m *tuiModel) flushText() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	m.pushScrollback(s)
+	m.println(s)
 	return nil
 }
 
@@ -563,21 +549,31 @@ func (m *tuiModel) flushTextString() (string, bool) {
 // to the scrollback.
 func (m *tuiModel) commitToolLine(line string) tea.Cmd {
 	if s, ok := m.flushTextString(); ok {
-		m.pushScrollback(s)
+		m.println(s)
 	}
-	m.pushScrollback(line)
+	m.println(line)
 	return nil
 }
 
-// pushScrollback appends a line to the internal scrollback buffer.
-// When sticky (auto-follow mode), keeps the view pinned to the bottom.
-// When the user has scrolled up (sticky=false, scrollOffset>0), their
-// position is preserved until they explicitly scrollToBottom or press End.
-func (m *tuiModel) pushScrollback(line string) {
-	m.scrollback = append(m.scrollback, line)
-	if m.sticky {
-		m.scrollOffset = 0
+// println queues a line for output to the terminal scrollback via
+// tea.Println, emitted by flushPrints at the end of each Update cycle.
+// In inline mode, committed lines scroll naturally above the live View() area.
+func (m *tuiModel) println(line string) {
+	m.printlnBuf = append(m.printlnBuf, line)
+}
+
+// flushPrints returns a Cmd that prints all queued lines to the terminal
+// in order, above the live View() area.
+func (m *tuiModel) flushPrints() tea.Cmd {
+	if len(m.printlnBuf) == 0 {
+		return nil
 	}
+	cmds := make([]tea.Cmd, len(m.printlnBuf))
+	for i, line := range m.printlnBuf {
+		cmds[i] = tea.Println(line)
+	}
+	m.printlnBuf = nil
+	return tea.Sequence(cmds...)
 }
 
 func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
@@ -599,7 +595,7 @@ func (m *tuiModel) handleTurnFinished() (tea.Model, tea.Cmd) {
 		// user sees it before the degraded turn starts, and add it to
 		// inputHistory so ↑ can recall it for re-editing.
 		for _, line := range strings.Split(s, "\n\n") {
-			m.pushScrollback(userEchoStyle.Render("> ") + line)
+			m.println(userEchoStyle.Render("> ") + line)
 			if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != line {
 				m.inputHistory = append(m.inputHistory, line)
 			}

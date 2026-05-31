@@ -37,18 +37,18 @@ type goalDoneMsg struct {
 func (m *tuiModel) dispatchGoal(args string) (tea.Model, tea.Cmd) {
 	fields := strings.Fields(args)
 	if len(fields) == 0 || strings.ToLower(fields[0]) == "help" {
-		m.pushScrollback(goalUsage())
+		m.println(goalUsage())
 		return m, nil
 	}
 	switch strings.ToLower(fields[0]) {
 	case "list", "ls":
 		var b bytes.Buffer
 		runTaskList(nil, &b, &b)
-		m.pushScrollback(strings.TrimRight(b.String(), "\n"))
+		m.println(strings.TrimRight(b.String(), "\n"))
 		return m, nil
 	case "resume":
 		if len(fields) < 2 {
-			m.pushScrollback(noticeStyle.Render("Usage: /goal resume <id>"))
+			m.println(noticeStyle.Render("Usage: /goal resume <id>"))
 			return m, nil
 		}
 		return m.goalResume(fields[1])
@@ -107,8 +107,8 @@ func (m *tuiModel) startGoalPlan(goal string) tea.Cmd {
 		task, err := store.Create(goal, subs)
 		prog.Send(goalPlannedMsg{task: task, err: err})
 	}()
-	m.pushScrollback(promptStyle.Render("> ") + "/goal " + goal)
-	m.pushScrollback(noticeStyle.Render("Planning…"))
+	m.println(promptStyle.Render("> ") + "/goal " + goal)
+	m.println(noticeStyle.Render("Planning…"))
 	return tickCmd()
 }
 
@@ -119,13 +119,13 @@ func (m *tuiModel) onGoalPlanned(msg goalPlannedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.turnRunning = false
 		m.cancelTurn = nil
-		m.pushScrollback(errorStyle.Render("goal: " + msg.err.Error()))
+		m.println(errorStyle.Render("goal: " + msg.err.Error()))
 		return m, nil
 	}
 
 	var b bytes.Buffer
 	printPlannedDAG(&b, msg.task)
-	m.pushScrollback(strings.TrimRight(b.String(), "\n"))
+	m.println(strings.TrimRight(b.String(), "\n"))
 
 	ch := make(chan UserResponse, 1)
 	m.openModal(askMsg{
@@ -175,7 +175,7 @@ func (m *tuiModel) startGoalRun(taskID string) tea.Cmd {
 		task, _ := store.Get(taskID)
 		prog.Send(goalDoneMsg{task: task, err: runErr})
 	}()
-	m.pushScrollback(noticeStyle.Render("Running…"))
+	m.println(noticeStyle.Render("Running…"))
 	return tickCmd()
 }
 
@@ -207,7 +207,7 @@ func (m *tuiModel) onGoalDone(msg goalDoneMsg) (tea.Model, tea.Cmd) {
 		b.WriteString(noticeStyle.Render("Goal " + msg.task.ShortID() + " finished."))
 	}
 	if b.Len() > 0 {
-		m.pushScrollback(b.String())
+		m.println(b.String())
 	}
 	return m, nil
 }
@@ -217,20 +217,20 @@ func (m *tuiModel) onGoalDone(msg goalDoneMsg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) goalResume(idArg string) (tea.Model, tea.Cmd) {
 	store, err := taskgraph.NewStore()
 	if err != nil {
-		m.pushScrollback(errorStyle.Render("goal: " + err.Error()))
+		m.println(errorStyle.Render("goal: " + err.Error()))
 		return m, nil
 	}
 	id, err := store.ResolveID(idArg)
 	if err != nil {
-		m.pushScrollback(errorStyle.Render("goal: " + err.Error() + "  (try /goal list)"))
+		m.println(errorStyle.Render("goal: " + err.Error() + "  (try /goal list)"))
 		return m, nil
 	}
 	t, err := store.Update(id, resetForResume)
 	if err != nil {
-		m.pushScrollback(errorStyle.Render("goal: " + err.Error()))
+		m.println(errorStyle.Render("goal: " + err.Error()))
 		return m, nil
 	}
-	m.pushScrollback(noticeStyle.Render(fmt.Sprintf("Resuming %s — re-running pending subtasks…", t.ShortID())))
+	m.println(noticeStyle.Render(fmt.Sprintf("Resuming %s — re-running pending subtasks…", t.ShortID())))
 	return m, m.startGoalRun(t.ID)
 }
 
