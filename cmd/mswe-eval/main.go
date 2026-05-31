@@ -162,6 +162,7 @@ func runGenerate(args []string) error {
 	provider := fs.String("provider", "", "provider passed to octo (empty = octo default)")
 	octoTimeout := fs.Duration("octo-timeout", 8*time.Minute, "kill an octo run after this long (guards against a stalled model stream hanging the batch)")
 	maxTurns := fs.Int("max-turns", 50, "octo --max-turns: model round-trips per task. Real SWE issues need to read several files, plan, then edit; octo's interactive default (20) starves them, and an unattended run can't say 'continue'.")
+	allowNet := fs.Bool("allow-net", false, "allow octo network access during generate (default false — hermetic eval prevents gold-patch leakage via web_fetch/web_search)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -188,7 +189,7 @@ func runGenerate(args []string) error {
 	var preds []mswe.Prediction
 	for i, inst := range insts {
 		fmt.Printf("[%d/%d] %s — clone + run octo…\n", i+1, len(insts), inst.ID())
-		patch, err := generateOne(inst, octoAbs, evalHome, *workdir, *model, *provider, *octoTimeout, *maxTurns)
+		patch, err := generateOne(inst, octoAbs, evalHome, *workdir, *model, *provider, *octoTimeout, *maxTurns, *allowNet)
 		if err != nil {
 			fmt.Printf("        ! skipped: %v\n", err)
 			continue
@@ -215,7 +216,7 @@ func runGenerate(args []string) error {
 
 // generateOne clones the instance's repo at its base commit, drives octo to
 // resolve the issue, and returns the test-scoped diff.
-func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider string, timeout time.Duration, maxTurns int) (string, error) {
+func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider string, timeout time.Duration, maxTurns int, allowNet bool) (string, error) {
 	if inst.BaseCommit() == "" {
 		return "", fmt.Errorf("no base commit (run `inspect` to confirm the field name)")
 	}
@@ -248,6 +249,11 @@ func generateOne(inst mswe.Instance, octoBin, evalHome, workdir, model, provider
 		return "", fmt.Errorf("write prompt file: %v", err)
 	}
 	octoArgs := []string{"chat", "--tools", "--permission-mode", "strict", "--no-save", "--plain", "--prompt-file", promptPath}
+	if !allowNet {
+		// Hermetic eval: sandbox disables network so web_fetch/web_search can't
+		// leak the gold patch from GitHub or search engines.
+		octoArgs = append(octoArgs, "--sandbox")
+	}
 	if maxTurns > 0 {
 		octoArgs = append(octoArgs, "--max-turns", strconv.Itoa(maxTurns))
 	}
