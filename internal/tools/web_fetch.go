@@ -55,6 +55,10 @@ func (WebFetchTool) Definition() agent.ToolDefinition {
 }
 
 func (WebFetchTool) Execute(ctx context.Context, _ string, input map[string]any) (agent.ToolResult, error) {
+	if !NetworkAllowed() {
+		return agent.ToolResult{Text: ""}, fmt.Errorf("web_fetch: network access is disabled by sandbox")
+	}
+
 	raw, _ := input["url"].(string)
 	if strings.TrimSpace(raw) == "" {
 		return agent.ToolResult{Text: ""}, fmt.Errorf("web_fetch: url is required")
