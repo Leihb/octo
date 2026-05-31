@@ -110,6 +110,12 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submit(msg.Alt)
 
 	case tea.KeyUp:
+		// Alt+Up: scroll up half page (MacBook-friendly — no PgUp key).
+		if msg.Alt {
+			m.sticky = false
+			m.scrollOffset += m.height / 2
+			return m, nil
+		}
 		if m.inputHistoryIdx+1 < len(m.inputHistory) {
 			m.inputHistoryIdx++
 			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
@@ -118,6 +124,15 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyDown:
+		// Alt+Down: scroll down half page (MacBook-friendly — no PgDn key).
+		if msg.Alt {
+			m.sticky = false
+			m.scrollOffset -= m.height / 2
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+			return m, nil
+		}
 		if m.inputHistoryIdx > 0 {
 			m.inputHistoryIdx--
 			m.ti.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
