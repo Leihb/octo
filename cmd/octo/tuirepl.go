@@ -213,6 +213,9 @@ type tuiModel struct {
 	// inputHistory stores submitted lines for ↑/↓ recall.
 	inputHistory    []string
 	inputHistoryIdx int // -1 = not browsing, 0..len-1 = browsing
+	// inputDraft holds the text that was in the input box before the user
+	// started browsing history with ↑, so ↓ can restore it.
+	inputDraft string
 
 	// turnRunning is true between starting a turn and turnFinishedMsg.
 	turnRunning bool

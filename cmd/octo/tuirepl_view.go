@@ -138,6 +138,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.inputHistoryIdx+1 < len(m.inputHistory) {
+			if m.inputHistoryIdx == -1 {
+				m.inputDraft = m.ta.Value()
+			}
 			m.inputHistoryIdx++
 			m.ta.SetValue(m.inputHistory[len(m.inputHistory)-1-m.inputHistoryIdx])
 			m.ta.CursorEnd()
@@ -161,7 +164,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.updateTextAreaHeight()
 		} else if m.inputHistoryIdx == 0 {
 			m.inputHistoryIdx = -1
-			m.ta.Reset()
+			m.ta.SetValue(m.inputDraft)
+			m.inputDraft = ""
+			m.ta.CursorEnd()
 			return m, m.updateTextAreaHeight()
 		}
 		return m, nil
