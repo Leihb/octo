@@ -293,47 +293,67 @@ func toAPIMessages(systemPrompt string, in []agent.Message) ([]apiMessage, error
 		// role="user" message AFTER the tool outputs, which is the OpenAI-shaped
 		// equivalent of Anthropic's [tool_result…, text] user message.
 		//
-		// Image blocks are folded into the user message as content parts (OpenAI
-		// vision format: [{type:"text",text:"..."},{type:"image_url",image_url:{url:"data:..."}}]).
+		// Image blocks following a tool_result are nested INTO that tool message's
+		// content array (OpenAI vision format). This preserves the tool_result/
+		// image association required by the API — without nesting, images between
+		// two tool_results would break the tool_call_id pairing.
 		if m.Role == agent.RoleUser && len(m.Blocks) > 0 {
 			var steerText strings.Builder
-			var contentParts []apiContentPart
-			for _, b := range m.Blocks {
+			i := 0
+			for i < len(m.Blocks) {
+				b := m.Blocks[i]
 				switch b.Type {
 				case "tool_result":
-					out = append(out, apiMessage{
-						Role:       "tool",
-						Content:    b.Result,
-						ToolCallID: b.ToolUseID,
-					})
+					// Collect following image blocks to nest inside this tool
+					// message's content. Text blocks are NOT nested — they become
+					// separate steer user messages after all tool outputs.
+					var imageParts []apiContentPart
+					j := i + 1
+					for j < len(m.Blocks) && m.Blocks[j].Type == "image" {
+						if m.Blocks[j].Image != nil {
+							dataURL := fmt.Sprintf("data:%s;base64,%s", m.Blocks[j].Image.MIMEType, base64.StdEncoding.EncodeToString(m.Blocks[j].Image.Data))
+							imageParts = append(imageParts, apiContentPart{
+								Type: "image_url",
+								ImageURL: &struct {
+									URL string `json:"url"`
+								}{URL: dataURL},
+							})
+						}
+						j++
+					}
+					msg := apiMessage{Role: "tool", ToolCallID: b.ToolUseID}
+					if len(imageParts) > 0 {
+						// Nest text + images into content array for vision support.
+						parts := make([]apiContentPart, 0, 1+len(imageParts))
+						if b.Result != "" {
+							parts = append(parts, apiContentPart{Type: "text", Text: b.Result})
+						}
+						parts = append(parts, imageParts...)
+						msg.ContentParts = parts
+					} else {
+						msg.Content = b.Result
+					}
+					out = append(out, msg)
+					i = j
 				case "text":
 					if steerText.Len() > 0 {
 						steerText.WriteString("\n\n")
 					}
 					steerText.WriteString(b.Text)
+					i++
 				case "image":
-					if b.Image != nil {
-						dataURL := fmt.Sprintf("data:%s;base64,%s", b.Image.MIMEType, base64.StdEncoding.EncodeToString(b.Image.Data))
-						contentParts = append(contentParts, apiContentPart{
-							Type: "image_url",
-							ImageURL: &struct {
-								URL string `json:"url"`
-							}{URL: dataURL},
-						})
+					// Standalone image (not following a tool_result) — add to steer.
+					if steerText.Len() > 0 {
+						steerText.WriteString("\n\n")
 					}
+					steerText.WriteString("[image]")
+					i++
+				default:
+					i++
 				}
 			}
 			if steerText.Len() > 0 {
-				contentParts = append([]apiContentPart{{Type: "text", Text: steerText.String()}}, contentParts...)
-			}
-			if len(contentParts) > 0 {
-				// Use array format only when images are present; otherwise stick to
-				// plain string content for compatibility with tests and simpler wire.
-				if len(contentParts) == 1 && contentParts[0].Type == "text" {
-					out = append(out, apiMessage{Role: "user", Content: contentParts[0].Text})
-				} else {
-					out = append(out, apiMessage{Role: "user", ContentParts: contentParts})
-				}
+				out = append(out, apiMessage{Role: "user", Content: steerText.String()})
 			}
 			continue
 		}

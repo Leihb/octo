@@ -401,11 +401,25 @@ func mergeUserMessages(prev apiMessage, next agent.Message) (apiMessage, error) 
 }
 
 // marshalBlocks converts agent.ContentBlock slice to []apiContentBlock.
-// tool_result blocks are serialized with a nested "content" string field
-// per the Anthropic wire format.
+// tool_result blocks are serialized with a nested "content" field per the
+// Anthropic wire format.
+//
+// IMPORTANT: When a tool_result is followed by non-tool_result blocks (image,
+// text), those blocks are nested INTO the tool_result's content array. This
+// preserves the Anthropic API requirement that tool_use must be immediately
+// followed by tool_result with no intervening blocks. Without this nesting,
+// image blocks between two tool_result blocks would break the tool_use/
+// tool_result pairing and cause HTTP 400 errors.
+//
+// Example transformation:
+//
+//	Input:  [tool_result(id1), image, tool_result(id2), image]
+//	Output: [tool_result(id1, content:[text, image]), tool_result(id2, content:[text, image])]
 func marshalBlocks(blocks []agent.ContentBlock) ([]map[string]any, error) {
 	out := make([]map[string]any, 0, len(blocks))
-	for _, b := range blocks {
+	i := 0
+	for i < len(blocks) {
+		b := blocks[i]
 		switch b.Type {
 		case "text":
 			out = append(out, map[string]any{
@@ -429,17 +443,61 @@ func marshalBlocks(blocks []agent.ContentBlock) ([]map[string]any, error) {
 			}
 			out = append(out, m)
 		case "tool_result":
+			// Collect following non-tool_result blocks to nest inside this
+			// tool_result's content. This ensures image blocks from read_file
+			// (or any tool returning images) are properly associated with
+			// their tool_result rather than appearing as sibling blocks.
+			var nestedContent []map[string]any
+			if b.Result != "" {
+				nestedContent = append(nestedContent, map[string]any{
+					"type": "text",
+					"text": b.Result,
+				})
+			}
+			j := i + 1
+			for j < len(blocks) && blocks[j].Type != "tool_result" && blocks[j].Type != "tool_use" {
+				switch blocks[j].Type {
+				case "image":
+					if blocks[j].Image == nil {
+						return nil, fmt.Errorf("anthropic: image block missing Image data")
+					}
+					nestedContent = append(nestedContent, map[string]any{
+						"type": "image",
+						"source": map[string]any{
+							"type":       "base64",
+							"media_type": blocks[j].Image.MIMEType,
+							"data":       encodeBase64(blocks[j].Image.Data),
+						},
+					})
+				case "text":
+					nestedContent = append(nestedContent, map[string]any{
+						"type": "text",
+						"text": blocks[j].Text,
+					})
+				}
+				j++
+			}
+
 			m := map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": b.ToolUseID,
-				"content":     b.Result,
+			}
+			// Use content array when there are nested blocks (images), otherwise
+			// use plain string for simpler tool results.
+			if len(nestedContent) == 1 && nestedContent[0]["type"] == "text" {
+				m["content"] = b.Result
+			} else if len(nestedContent) > 0 {
+				m["content"] = nestedContent
+			} else {
+				m["content"] = b.Result
 			}
 			if b.IsError {
 				m["is_error"] = true
 			}
 			out = append(out, m)
+			i = j - 1 // advance past consumed blocks (-1 because loop does i++)
 		case "image":
-			// Anthropic image block: base64-encoded data with source type.
+			// Standalone image block (not following a tool_result).
 			if b.Image == nil {
 				return nil, fmt.Errorf("anthropic: image block missing Image data")
 			}
@@ -454,6 +512,7 @@ func marshalBlocks(blocks []agent.ContentBlock) ([]map[string]any, error) {
 		default:
 			return nil, fmt.Errorf("anthropic: unknown block type %q", b.Type)
 		}
+		i++
 	}
 	return out, nil
 }

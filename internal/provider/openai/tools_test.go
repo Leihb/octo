@@ -374,31 +374,31 @@ func TestSend_ImageBlock_WireFormat(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// user, assistant(tool_call), tool(result), user(image)
-	if len(wireReq.Messages) != 4 {
-		t.Fatalf("messages len = %d, want 4: %s", len(wireReq.Messages), capturedBody)
+	// user, assistant(tool_call), tool(result with nested [text, image_url])
+	if len(wireReq.Messages) != 3 {
+		t.Fatalf("messages len = %d, want 3: %s", len(wireReq.Messages), capturedBody)
 	}
-	// msg[2] = tool result
+	// msg[2] = tool result with nested content array
 	if wireReq.Messages[2].Role != "tool" || wireReq.Messages[2].ToolCallID != "call-1" {
 		t.Errorf("msg[2] = %+v, want tool/call-1", wireReq.Messages[2])
 	}
-	// msg[3] = user message carrying the image block
-	if wireReq.Messages[3].Role != "user" {
-		t.Errorf("msg[3].role = %q, want user", wireReq.Messages[3].Role)
-	}
-	// Content should be an array with an image_url part.
-	parts, ok := wireReq.Messages[3].Content.([]any)
+	// Content should be an array with text + image_url parts.
+	parts, ok := wireReq.Messages[2].Content.([]any)
 	if !ok {
-		t.Fatalf("msg[3].content = %T, want []any", wireReq.Messages[3].Content)
+		t.Fatalf("msg[2].content = %T, want []any (nested content array)", wireReq.Messages[2].Content)
 	}
-	if len(parts) != 1 {
-		t.Fatalf("content parts len = %d, want 1", len(parts))
+	if len(parts) != 2 {
+		t.Fatalf("content parts len = %d, want 2 (text + image_url)", len(parts))
 	}
-	first, _ := parts[0].(map[string]any)
-	if first["type"] != "image_url" {
-		t.Errorf("parts[0].type = %v, want image_url", first["type"])
+	textPart, _ := parts[0].(map[string]any)
+	if textPart["type"] != "text" {
+		t.Errorf("parts[0].type = %v, want text", textPart["type"])
 	}
-	imgURL, _ := first["image_url"].(map[string]any)
+	imgPart, _ := parts[1].(map[string]any)
+	if imgPart["type"] != "image_url" {
+		t.Errorf("parts[1].type = %v, want image_url", imgPart["type"])
+	}
+	imgURL, _ := imgPart["image_url"].(map[string]any)
 	url, _ := imgURL["url"].(string)
 	if !strings.HasPrefix(url, "data:image/png;base64,") {
 		t.Errorf("image_url.url prefix wrong: %q", url)

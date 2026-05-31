@@ -213,8 +213,9 @@ func TestSend_ToolResultMessage(t *testing.T) {
 }
 
 // TestSend_ToolResultWithSteerText verifies a user/tool_result message that
-// also carries a steer text block (design §5) serializes as a multi-block user
-// message [{tool_result}, {text}] — the API-blessed mid-turn-steer shape.
+// also carries a steer text block (design §5) serializes the steer text
+// nested inside the tool_result's content array — preserving the tool_use/
+// tool_result pairing required by the Anthropic API.
 func TestSend_ToolResultWithSteerText(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,14 +259,28 @@ func TestSend_ToolResultWithSteerText(t *testing.T) {
 	if err := json.Unmarshal(wireReq.Messages[2].Content, &userContent); err != nil {
 		t.Fatalf("decode user content: %v", err)
 	}
-	if len(userContent) != 2 {
-		t.Fatalf("user content blocks = %d, want 2 (tool_result + text): %v", len(userContent), userContent)
+	// Should be 1 block: tool_result with nested content array [text, text]
+	if len(userContent) != 1 {
+		t.Fatalf("user content blocks = %d, want 1 (tool_result with nested content): %v", len(userContent), userContent)
 	}
 	if userContent[0]["type"] != "tool_result" {
 		t.Errorf("blocks[0].type = %v, want tool_result", userContent[0]["type"])
 	}
-	if userContent[1]["type"] != "text" || userContent[1]["text"] != "also handle the error case" {
-		t.Errorf("blocks[1] = %v, want text steer", userContent[1])
+	// Verify nested content array
+	nestedContent, ok := userContent[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("tool_result.content is not an array: %v", userContent[0]["content"])
+	}
+	if len(nestedContent) != 2 {
+		t.Fatalf("nested content len = %d, want 2: %v", len(nestedContent), nestedContent)
+	}
+	first, _ := nestedContent[0].(map[string]any)
+	second, _ := nestedContent[1].(map[string]any)
+	if first["type"] != "text" || first["text"] != "hi" {
+		t.Errorf("nested[0] = %v, want text/hi", first)
+	}
+	if second["type"] != "text" || second["text"] != "also handle the error case" {
+		t.Errorf("nested[1] = %v, want text steer", second)
 	}
 }
 
@@ -386,8 +401,9 @@ func TestSend_MergesConsecutivePlainUserMessages(t *testing.T) {
 	}
 }
 
-// TestSend_ImageBlock_WireFormat verifies that an image content block is
-// serialized as an Anthropic image source block with base64 data.
+// TestSend_ImageBlock_WireFormat verifies that an image content block
+// following a tool_result is nested inside the tool_result's content array,
+// preserving the tool_use/tool_result pairing required by the Anthropic API.
 func TestSend_ImageBlock_WireFormat(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +441,7 @@ func TestSend_ImageBlock_WireFormat(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// user, assistant(tool_use), user(tool_result + image)
+	// user, assistant(tool_use), user(tool_result with nested [text, image])
 	if len(wireReq.Messages) != 3 {
 		t.Fatalf("messages len = %d, want 3: %s", len(wireReq.Messages), capturedBody)
 	}
@@ -434,16 +450,30 @@ func TestSend_ImageBlock_WireFormat(t *testing.T) {
 	if err := json.Unmarshal(wireReq.Messages[2].Content, &userContent); err != nil {
 		t.Fatalf("decode user content: %v", err)
 	}
-	if len(userContent) != 2 {
-		t.Fatalf("user content blocks = %d, want 2 (tool_result + image): %v", len(userContent), userContent)
+	// Should be 1 block: tool_result with nested content array [text, image]
+	if len(userContent) != 1 {
+		t.Fatalf("user content blocks = %d, want 1 (tool_result with nested content): %v", len(userContent), userContent)
 	}
 	if userContent[0]["type"] != "tool_result" {
 		t.Errorf("blocks[0].type = %v, want tool_result", userContent[0]["type"])
 	}
-	if userContent[1]["type"] != "image" {
-		t.Errorf("blocks[1].type = %v, want image", userContent[1]["type"])
+	// Verify nested content array
+	nestedContent, ok := userContent[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("tool_result.content is not an array: %v", userContent[0]["content"])
 	}
-	src, ok := userContent[1]["source"].(map[string]any)
+	if len(nestedContent) != 2 {
+		t.Fatalf("nested content len = %d, want 2 (text + image): %v", len(nestedContent), nestedContent)
+	}
+	textPart, _ := nestedContent[0].(map[string]any)
+	imagePart, _ := nestedContent[1].(map[string]any)
+	if textPart["type"] != "text" {
+		t.Errorf("nested[0].type = %v, want text", textPart["type"])
+	}
+	if imagePart["type"] != "image" {
+		t.Errorf("nested[1].type = %v, want image", imagePart["type"])
+	}
+	src, ok := imagePart["source"].(map[string]any)
 	if !ok {
 		t.Fatalf("image source missing or wrong type")
 	}
