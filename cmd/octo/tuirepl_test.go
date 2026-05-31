@@ -44,19 +44,20 @@ func TestTUI_IdleEnterStartsTurn(t *testing.T) {
 	}
 }
 
-func TestTUI_RunningEnterSteers(t *testing.T) {
+func TestTUI_RunningEnterEnqueues(t *testing.T) {
 	m := newTestModel()
 	m.turnRunning = true
 	setInput(m, "also handle errors")
 	_, _ = m.submit() // Enter
-	if !m.a.HasPendingSteer() {
-		t.Fatal("Enter while running should steer the agent")
+	if !m.a.Inbox.HasPending() {
+		t.Fatal("Enter while running should enqueue to inbox")
 	}
-	if got := m.a.DrainSteer(); got != "also handle errors" {
-		t.Errorf("steer = %q", got)
+	msgs := m.a.Inbox.Drain()
+	if len(msgs) != 1 || msgs[0] != "also handle errors" {
+		t.Errorf("inbox = %v", msgs)
 	}
 	if len(m.queue) != 0 {
-		t.Errorf("steer must not enqueue, queue = %+v", m.queue)
+		t.Errorf("inbox must not enqueue to queue, queue = %+v", m.queue)
 	}
 }
 
@@ -90,8 +91,8 @@ func TestTUI_RunningCtrlQQueues(t *testing.T) {
 	if len(m.queue) != 1 || m.queue[0].text != "run the linter" {
 		t.Fatalf("Ctrl+Q should queue, got %+v", m.queue)
 	}
-	if m.a.HasPendingSteer() {
-		t.Error("queue must not steer the agent")
+	if m.a.Inbox.HasPending() {
+		t.Error("queue must not enqueue to inbox")
 	}
 }
 
@@ -139,21 +140,21 @@ func TestTUI_TurnFinishedDequeuesNext(t *testing.T) {
 	}
 }
 
-func TestTUI_DegradedSteerRunsBeforeQueue(t *testing.T) {
+func TestTUI_DegradedInboxRunsBeforeQueue(t *testing.T) {
 	m := newTestModel()
 	m.turnRunning = true
-	m.a.Steer("degraded steer") // never injected → pending at turn end
+	m.a.Inbox.Enqueue("degraded inbox") // never drained during turn → pending at turn end
 	m.queue = []pendingItem{{text: "queued"}}
 
 	_, _ = m.handleTurnFinished()
 
-	// The degraded steer is prepended, so it's the one that starts running and
+	// The degraded inbox message is prepended, so it's the one that starts running and
 	// "queued" remains in the queue.
 	if len(m.queue) != 1 || m.queue[0].text != "queued" {
 		t.Fatalf("queue after dequeue = %+v, want [queued]", m.queue)
 	}
-	if m.a.HasPendingSteer() {
-		t.Error("steer should have been drained into the queue")
+	if m.a.Inbox.HasPending() {
+		t.Error("inbox should have been drained into the queue")
 	}
 }
 

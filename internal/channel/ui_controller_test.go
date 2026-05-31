@@ -60,11 +60,6 @@ func TestUIController_ToolEventsSuppressed(t *testing.T) {
 		t.Fatalf("expected no message on tool input delta, got %d", mock.sentTextCount())
 	}
 
-	// Steer injected — should be suppressed.
-	handler(agent.AgentEvent{Kind: agent.EventSteerInjected, Text: "do this instead"})
-	if mock.sentTextCount() != 0 {
-		t.Fatalf("expected no message on steer, got %d", mock.sentTextCount())
-	}
 }
 
 func TestUIController_ToolDoneBuffersFiles(t *testing.T) {

@@ -29,7 +29,7 @@ func TestRunTurn_PrependsIdleBgNote(t *testing.T) {
 	cs := &capturingSender{stubSender: stubSender{reply: "ok"}}
 	a := agent.New(cs, "m")
 	// Simulate a background process finishing while the REPL was idle.
-	a.Steer(formatBgNote(tools.BgExit{ID: "bg_1", Command: "go build ./...", Status: "exited: 0", NewOutput: "done"}))
+	a.Inbox.Enqueue(formatBgNote(tools.BgExit{ID: "bg_1", Command: "go build ./...", Status: "exited: 0", NewOutput: "done"}))
 
 	cfg := replConfig{a: a} // no tools, no memStore, no hooks
 	if _, err := runTurn(context.Background(), a, cfg, noopSink{}, "what's next?"); err != nil {
@@ -48,8 +48,8 @@ func TestRunTurn_PrependsIdleBgNote(t *testing.T) {
 		t.Errorf("bg notice should precede the user text; got:\n%s", got)
 	}
 	// Drained exactly once — nothing left for a second turn.
-	if a.HasPendingSteer() {
-		t.Error("steer buffer should be empty after the turn drained it")
+	if a.Inbox.HasPending() {
+		t.Error("inbox should be empty after the turn drained it")
 	}
 }
 

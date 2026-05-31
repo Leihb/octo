@@ -56,13 +56,12 @@ func runTurn(ctx context.Context, a *agent.Agent, cfg replConfig, sink ViewSink,
 	turnInput := line
 
 	// Drain anything that accumulated before this turn started — in practice a
-	// background-process completion notice (Agent.Steer) that fired while the
+	// background-process completion notice (Agent.Inbox) that fired while the
 	// REPL was idle. Prepend it so the model sees it as context for this turn.
-	// This is the idle counterpart to the in-turn injection RunStream does at
-	// each tool-batch boundary; the steer buffer holds no user steer here (that
-	// only arrives mid-turn and is drained by the boundary or post-turn).
-	if pending := a.DrainSteer(); pending != "" {
-		turnInput = pending + "\n\n" + turnInput
+	// This is the idle counterpart to the in-turn drain that RunStream does at
+	// the start of each loop iteration.
+	if pending := a.Inbox.Drain(); len(pending) > 0 {
+		turnInput = strings.Join(pending, "\n\n") + "\n\n" + turnInput
 	}
 
 	if cfg.memStore != nil && len(cfg.tools) > 0 {

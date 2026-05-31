@@ -143,15 +143,11 @@ type Agent struct {
 	// the compaction trigger.
 	lastInputTokens int
 
-	// steerMu guards steerBuf, the queue of "steer" messages the user typed
-	// while a turn was running. The run loop drains it at each tool-batch
-	// boundary and merges the text into the trailing tool_result message, so
-	// the model sees a mid-turn course correction without breaking the
-	// user/assistant alternation. Written from the UI goroutine via Steer,
-	// drained from the loop goroutine via drainSteer. See
-	// dev-docs/tui-input-modes-design.md §5.
-	steerMu  sync.Mutex
-	steerBuf []string
+	// Inbox holds user messages that arrived while a turn was running.
+	// The run loop drains it at the start of each iteration, before the LLM
+	// call, so messages enter history in chronological order. This mirrors
+	// Ruby octo's @inbox and keeps mid-turn input handling simple.
+	Inbox Inbox
 }
 
 // StopReason sentinels set on the Reply when a loop budget is exhausted.
@@ -423,6 +419,13 @@ func (a *Agent) runLoop(
 			return a.finishInterrupted(handler)
 		}
 
+		// Drain inbox messages that arrived since the last iteration.
+		// Done before the LLM call so the model sees mid-turn user input
+		// as a first-class message boundary, not folded into tool output.
+		for _, m := range a.Inbox.Drain() {
+			a.History.Append(NewUserMessage(m))
+		}
+
 		reply, err := send(ctx, a.History.Snapshot())
 		if err != nil {
 			// Interrupt during the provider call: finalize cleanly rather than
@@ -471,24 +474,6 @@ func (a *Agent) runLoop(
 			emitToolResultEvents(handler, reply.Blocks, resultBlocks)
 
 			a.History.Append(NewToolResultMessage(resultBlocks))
-
-			// Steer injection: drain pending steer messages and append them as
-			// standalone user messages. Previously they were folded into the
-			// tool_result as an extra text block, which hid system-reminder
-			// notifications inside tool output where the model often ignored them.
-			//
-			// By appending steer as its own user message, it gets a first-class
-			// message boundary. The next loop iteration will see:
-			//   ... assistant(tool_use) → user(tool_result) → user(steer) → assistant(reply)
-			//
-			// For providers that require strict user/assistant alternation, the
-			// adapter layer (provider/openai.go) merges consecutive user messages.
-			if steer := a.drainSteer(); steer != "" {
-				a.History.Append(NewUserMessage(steer))
-				if handler != nil {
-					handler(AgentEvent{Kind: EventSteerInjected, Text: steer})
-				}
-			}
 
 			// Turn-in compaction check: after a tool batch, history may have
 			// grown significantly. If the estimated size is near the window,
