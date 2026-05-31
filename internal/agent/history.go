@@ -84,6 +84,19 @@ func (h *History) Tail(n int) []Message {
 	return out
 }
 
+// replaceLast replaces the last message in history with m. If history is empty,
+// this is a no-op. Used by ensureToolPairing to merge synthetic tool_results
+// into an existing user message (e.g., from inbox drain) to preserve the
+// tool_use/tool_result pairing requirement.
+func (h *History) replaceLast(m Message) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.messages) == 0 {
+		return
+	}
+	h.messages[len(h.messages)-1] = m
+}
+
 // FindSystemMsg returns the first system message index, or -1.
 func (h *History) FindSystemMsg() int {
 	h.mu.RLock()

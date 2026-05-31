@@ -36,8 +36,13 @@ func synthesizeInterruptedToolResults(blocks []ContentBlock) []ContentBlock {
 //   - Orphaned assistant(tool_use) at the end of history (no following tool_result)
 //   - Multiple consecutive tool_use messages without tool_results (rare edge case)
 //
-// Synthesized tool_results use is_error=true with "[Interrupted by user]" to
-// signal clearly to the LLM that the tool did not complete.
+// IMPORTANT: If the last message is a non-tool-result user message (e.g., from
+// inbox drain), the synthetic tool_results are MERGED into that message rather
+// than appended as a new message. This preserves the Anthropic API requirement
+// that tool_use must be immediately followed by tool_result.
+//
+// Synthesized tool_results use is_error=true with "[Tool execution was interrupted]"
+// to signal clearly to the LLM that the tool did not complete.
 func (a *Agent) ensureToolPairing() {
 	msgs := a.History.Snapshot()
 	if len(msgs) == 0 {
@@ -80,5 +85,32 @@ func (a *Agent) ensureToolPairing() {
 	for _, b := range orphans {
 		results = append(results, NewToolResultBlock(b.ID, "[Tool execution was interrupted or failed to complete]", true))
 	}
-	a.History.Append(NewToolResultMessage(results))
+
+	// Check if the last message is a non-tool-result user message (e.g., from
+	// inbox drain). If so, we need to MERGE the synthetic tool_results into
+	// that message to preserve the tool_use/tool_result pairing requirement.
+	lastMsg := msgs[len(msgs)-1]
+	if lastMsg.Role == RoleUser && !hasToolResult(lastMsg) {
+		// Merge: replace the last user message with one that contains both
+		// the original content AND the synthetic tool_results.
+		// The tool_results must come FIRST to satisfy the API requirement.
+		mergedBlocks := make([]ContentBlock, 0, len(results)+1)
+		mergedBlocks = append(mergedBlocks, results...)
+
+		// Add the original content as a text block
+		if lastMsg.Content != "" {
+			mergedBlocks = append(mergedBlocks, NewTextBlock(lastMsg.Content))
+		}
+		// Add any existing blocks from the last message
+		mergedBlocks = append(mergedBlocks, lastMsg.Blocks...)
+
+		// Replace the last message in history
+		a.History.replaceLast(Message{
+			Role:   RoleUser,
+			Blocks: mergedBlocks,
+		})
+	} else {
+		// No merge needed - just append as a new user message
+		a.History.Append(NewToolResultMessage(results))
+	}
 }

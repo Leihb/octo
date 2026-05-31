@@ -150,6 +150,52 @@ func TestEnsureToolPairing(t *testing.T) {
 			t.Errorf("last block ToolUseID = %q, want c2", last.Blocks[0].ToolUseID)
 		}
 	})
+
+	t.Run("orphaned tool_use with trailing user message gets merged", func(t *testing.T) {
+		// This is the critical bug fix: when inbox drain adds a user message
+		// after an orphaned tool_use, the synthetic tool_result must be
+		// MERGED into that user message to preserve the API's tool_use/
+		// tool_result pairing requirement.
+		a := New(&summarizeFake{}, "m")
+		a.History.Append(NewUserMessage("read it"))
+		a.History.Append(NewToolUseMessage([]ContentBlock{NewToolUseBlock("c1", "read_file", nil)}))
+		// Simulate inbox drain adding a steer message
+		a.History.Append(NewUserMessage("also handle errors"))
+		// Missing tool_result for c1!
+
+		a.ensureToolPairing()
+
+		// History should NOT grow - the last message should be REPLACED (merged)
+		if a.History.Len() != 3 {
+			t.Fatalf("history len = %d, want 3 (merged, not appended)", a.History.Len())
+		}
+		msgs := a.History.Snapshot()
+		last := msgs[2]
+		if last.Role != RoleUser {
+			t.Fatalf("last message role = %q, want user", last.Role)
+		}
+		// Should have: tool_result block + text block (merged)
+		if len(last.Blocks) != 2 {
+			t.Fatalf("last message blocks = %d, want 2 (tool_result + text)", len(last.Blocks))
+		}
+		// First block should be the synthetic tool_result
+		if last.Blocks[0].Type != "tool_result" {
+			t.Errorf("last.Blocks[0].Type = %q, want tool_result", last.Blocks[0].Type)
+		}
+		if last.Blocks[0].ToolUseID != "c1" {
+			t.Errorf("last.Blocks[0].ToolUseID = %q, want c1", last.Blocks[0].ToolUseID)
+		}
+		if !last.Blocks[0].IsError {
+			t.Error("last.Blocks[0].IsError = false, want true")
+		}
+		// Second block should be the original steer text
+		if last.Blocks[1].Type != "text" {
+			t.Errorf("last.Blocks[1].Type = %q, want text", last.Blocks[1].Type)
+		}
+		if last.Blocks[1].Text != "also handle errors" {
+			t.Errorf("last.Blocks[1].Text = %q, want %q", last.Blocks[1].Text, "also handle errors")
+		}
+	})
 }
 
 func TestFinishInterrupted_OrphanedToolUse(t *testing.T) {
