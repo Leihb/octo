@@ -295,7 +295,14 @@ func newTUIModel(cfg replConfig) *tuiModel {
 	ta.Placeholder = "Ask anything…"
 	ta.Focus()
 	ta.ShowLineNumbers = false
-	ta.Prompt = "> "
+	// Only the first line shows "> "; subsequent lines are padded with spaces
+	// so text aligns (Claude Code style).
+	ta.SetPromptFunc(2, func(lineIdx int) string {
+		if lineIdx == 0 {
+			return "> "
+		}
+		return "  "
+	})
 	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
 	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(tui.ColBrand).Bold(true)
 	// Disable up/down line navigation so we can use them for input-history

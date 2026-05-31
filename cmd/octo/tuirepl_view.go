@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/Leihb/octo-agent/internal/agent"
 	"github.com/Leihb/octo-agent/internal/permission"
@@ -476,9 +478,8 @@ func (m *tuiModel) View() string {
 
 // updateTextAreaHeight sets the textarea height to match the number of lines
 // in the current value, capped at a maximum so it doesn't take over the screen.
-// When the height changes it sends a no-op key to the textarea so that its
-// internal repositionView runs with the new height, preventing the viewport
-// from scrolling past content that is still visible.
+// When the height grows we also reset the viewport YOffset to 0 via reflection
+// so that earlier lines remain visible instead of being scrolled out of view.
 func (m *tuiModel) updateTextAreaHeight() tea.Cmd {
 	lines := strings.Count(m.ta.Value(), "\n") + 1
 	maxH := min(6, m.height/4)
@@ -490,10 +491,16 @@ func (m *tuiModel) updateTextAreaHeight() tea.Cmd {
 		return nil
 	}
 	m.ta.SetHeight(newH)
-	// Trigger repositionView with the updated height by sending a harmless key.
-	var cmd tea.Cmd
-	m.ta, cmd = m.ta.Update(tea.KeyMsg{Type: tea.KeyHome})
-	return cmd
+	// textarea.viewport is unexported; use unsafe to reset YOffset.
+	v := reflect.ValueOf(&m.ta).Elem().FieldByName("viewport")
+	if !v.IsValid() || v.IsNil() {
+		return nil
+	}
+	vp := reflect.NewAt(v.Elem().Type(), unsafe.Pointer(v.Elem().UnsafeAddr())).Elem()
+	if yOffset := vp.FieldByName("YOffset"); yOffset.IsValid() {
+		yOffset.SetInt(0)
+	}
+	return nil
 }
 
 func (m *tuiModel) renderInputBox() string {
